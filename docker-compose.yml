@@ -1,0 +1,102 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: mvp-ollama
+    gpus: all
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "qwen2.5:3b"]
+    restart: "no"
+
+  agno_service:
+    build:
+      context: .
+      dockerfile: agno_service/Dockerfile
+    container_name: mvp-agno-service
+    environment:
+      AGNO_MODEL_PROVIDER: ${AGNO_MODEL_PROVIDER:-ollama}
+      AGNO_OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      AGNO_OLLAMA_HOST: http://ollama:11434
+      AGNO_OPENAI_MODEL: ${AGNO_OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_ORG: ${OPENAI_ORG:-}
+    ports:
+      - "8010:8010"
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: mvp-server
+    environment:
+      DATABASE_URL: file:/workspace/server/runtime/dev.db
+      PORT: 8787
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
+      APP_ORIGINS: ${APP_ORIGINS:-}
+      SESSION_SECRET: ${SESSION_SECRET:-change-this-session-secret}
+      CONFIG_HMAC_SECRET: ${CONFIG_HMAC_SECRET:-change-this-config-hmac-secret}
+      STORE_SIMULATION_CONTENT: ${STORE_SIMULATION_CONTENT:-false}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-30}
+      AGNO_BASE_URL: http://agno_service:8010
+      AGNO_ENABLED: ${AGNO_ENABLED:-true}
+      AGNO_TIMEOUT_MS: ${AGNO_TIMEOUT_MS:-90000}
+    ports:
+      - "8787:8787"
+    depends_on:
+      agno_service:
+        condition: service_healthy
+    volumes:
+      - server_runtime:/workspace/server/runtime
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8787/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: mvp-client
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "5173:5173"
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  server_runtime:

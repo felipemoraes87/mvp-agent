@@ -1,0 +1,136 @@
+﻿@import "tailwindcss";
+
+:root {
+  --bg: #0f172a;
+  --bg-elev: #111b31;
+  --card: #1e293b;
+  --card-soft: #243349;
+  --border: #334155;
+  --ink: #e2e8f0;
+  --ink-soft: #94a3b8;
+  --primary: #4f46e5;
+  --primary-soft: #6366f1;
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f7fb;
+  --bg-elev: #ffffff;
+  --card: #ffffff;
+  --card-soft: #f8fafc;
+  --border: #cbd5e1;
+  --ink: #0f172a;
+  --ink-soft: #475569;
+  --primary: #2563eb;
+  --primary-soft: #3b82f6;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at 5% 0%, #1b2950 0, transparent 38%),
+    radial-gradient(circle at 95% 0%, #1f2a48 0, transparent 32%),
+    linear-gradient(180deg, #0f172a, #0b1224);
+  color: var(--ink);
+  font-family: "Segoe UI", "Inter", sans-serif;
+}
+
+:root[data-theme="light"] body {
+  background: radial-gradient(circle at 4% 0%, #dbeafe 0, transparent 38%),
+    radial-gradient(circle at 95% 0%, #e2e8f0 0, transparent 32%),
+    linear-gradient(180deg, #f8fafc, #eef2f7);
+}
+
+a {
+  color: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: 14px;
+}
+
+.panel-soft {
+  border: 1px solid var(--border);
+  background: var(--card-soft);
+  border-radius: 12px;
+}
+
+.input-dark {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card-soft) 75%, #0f172a 25%);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+}
+
+.input-dark:focus {
+  outline: 2px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: 0;
+}
+
+.btn-primary {
+  border: 1px solid color-mix(in srgb, var(--primary) 75%, #000 25%);
+  background: linear-gradient(180deg, var(--primary-soft), var(--primary));
+  color: #fff;
+  border-radius: 10px;
+  padding: 0.55rem 0.9rem;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn-ghost {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card-soft) 75%, #0f172a 25%);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 0.55rem 0.9rem;
+}
+
+.btn-ghost:hover {
+  background: color-mix(in srgb, var(--card-soft) 90%, #0f172a 10%);
+}
+
+:root[data-theme="light"] .text-slate-100,
+:root[data-theme="light"] .text-slate-200,
+:root[data-theme="light"] .text-slate-300 {
+  color: #0f172a !important;
+}
+
+:root[data-theme="light"] .text-slate-400 {
+  color: #475569 !important;
+}
+
+:root[data-theme="light"] .bg-slate-900,
+:root[data-theme="light"] .bg-slate-900\/40,
+:root[data-theme="light"] .bg-slate-900\/50,
+:root[data-theme="light"] .bg-slate-900\/60,
+:root[data-theme="light"] .bg-slate-900\/70,
+:root[data-theme="light"] .bg-slate-900\/80,
+:root[data-theme="light"] .bg-slate-900\/35,
+:root[data-theme="light"] .bg-slate-800,
+:root[data-theme="light"] .bg-slate-800\/70,
+:root[data-theme="light"] .bg-slate-800\/60,
+:root[data-theme="light"] .bg-\[\#101a2f\],
+:root[data-theme="light"] .bg-\[\#111b31\],
+:root[data-theme="light"] .bg-\[\#0d162a\] {
+  background-color: #f8fafc !important;
+}
+
+:root[data-theme="light"] .border-slate-700,
+:root[data-theme="light"] .border-slate-700\/70,
+:root[data-theme="light"] .border-slate-700\/60,
+:root[data-theme="light"] .border-slate-800\/70 {
+  border-color: #cbd5e1 !important;
+}

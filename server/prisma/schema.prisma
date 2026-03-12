@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TEAM_MAINTAINER
+  OPERATOR
+}
+
+enum AgentType {
+  SUPERVISOR
+  SPECIALIST
+  TICKET
+}
+
+enum ToolType {
+  slack
+  confluence
+  jira
+  http
+  internal
+}
+
+enum ToolMode {
+  mock
+  real
+}
+
+enum ToolPolicy {
+  read
+  write
+}
+
+enum RiskLevel {
+  low
+  med
+  high
+}
+
+enum DataClassification {
+  public
+  internal
+  confidential
+  restricted
+}
+
+model Team {
+  id               String            @id @default(cuid())
+  key              String            @unique
+  name             String
+  description      String?
+  agents           Agent[]
+  tools            Tool[]
+  knowledgeSources KnowledgeSource[]
+  maintainers      User[]
+  routingRules     RoutingRule[]
+  groups           Group[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  role         Role
+  teamId       String?
+  team         Team?      @relation(fields: [teamId], references: [id])
+  auditLogs    AuditLog[]
+  memberships  GroupMembership[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Group {
+  id          String            @id @default(cuid())
+  name        String
+  description String?
+  teamId      String?
+  team        Team?             @relation(fields: [teamId], references: [id])
+  memberships GroupMembership[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([name, teamId])
+}
+
+model GroupMembership {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String
+  group     Group    @relation(fields: [groupId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([groupId, userId])
+}
+
+model Agent {
+  id                String             @id @default(cuid())
+  name              String
+  description       String
+  prompt            String
+  emoji             String?
+  avatarUrl         String?
+  primaryModel      String?
+  fallbackModels    String?
+  reasoningEnabled  Boolean            @default(false)
+  temperature       Float?
+  maxTokens         Int?
+  addHistoryContext Boolean            @default(false)
+  historySessions   Int?
+  addStateContext   Boolean            @default(false)
+  knowledgeMode     String?
+  knowledgeMaxResults Int?
+  knowledgeAddReferences Boolean       @default(true)
+  knowledgeContextFormat String?
+  knowledgeFilters  Json?
+  tags              Json
+  type              AgentType
+  isGlobal          Boolean            @default(false)
+  visibility        String             @default("private")
+  teamId            String?
+  team              Team?              @relation(fields: [teamId], references: [id])
+  toolLinks         AgentTool[]
+  knowledgeLinks    AgentKnowledge[]
+  outgoingHandoffs  Handoff[]          @relation("FromAgent")
+  incomingHandoffs  Handoff[]          @relation("ToAgent")
+  routingTargets    RoutingRule[]      @relation("RoutingTarget")
+  routingFallbacks  RoutingRule[]      @relation("RoutingFallback")
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@unique([name, teamId])
+}
+
+model Tool {
+  id                    String             @id @default(cuid())
+  name                  String             @unique
+  description           String?
+  callName              String?
+  transport             String?
+  endpoint              String?
+  method                String?
+  authRef               String?
+  timeoutMs             Int?
+  type                  ToolType
+  mode                  ToolMode
+  policy                ToolPolicy
+  riskLevel             RiskLevel
+  dataClassificationIn  DataClassification
+  dataClassificationOut DataClassification
+  inputSchema           Json
+  outputSchema          Json
+  rateLimitPerMinute    Int                @default(60)
+  visibility            String             @default("private")
+  teamId                String?
+  team                  Team?              @relation(fields: [teamId], references: [id])
+  agentLinks            AgentTool[]
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+}
+
+model AgentTool {
+  id       String  @id @default(cuid())
+  agentId  String
+  toolId   String
+  canRead  Boolean @default(true)
+  canWrite Boolean @default(false)
+  agent    Agent   @relation(fields: [agentId], references: [id])
+  tool     Tool    @relation(fields: [toolId], references: [id])
+
+  @@unique([agentId, toolId])
+}
+
+model KnowledgeSource {
+  id                     String   @id @default(cuid())
+  name                   String
+  url                    String
+  tags                   Json
+  sourceType             String?
+  sourceConfig           Json?
+  chunkSize              Int?
+  chunkOverlap           Int?
+  chunkStrategy          String?
+  embeddingProvider      String?
+  embeddingModel         String?
+  vectorStoreProvider    String?
+  vectorStoreIndex       String?
+  retrievalMode          String?
+  searchType             String?
+  maxResults             Int?
+  rerankerProvider       String?
+  rerankerModel          String?
+  metadataFilter         Json?
+  contextFormat          String?
+  addContextInstructions Boolean  @default(false)
+  addReferences          Boolean  @default(true)
+  syncStatus             String?  @default("idle")
+  lastSyncedAt           DateTime?
+  lastSyncError          String?
+  indexedDocuments       Int      @default(0)
+  visibility             String   @default("private")
+  ownerTeamId            String
+  ownerTeam              Team     @relation(fields: [ownerTeamId], references: [id])
+  agentLinks             AgentKnowledge[]
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}
+
+model AgentKnowledge {
+  id                String          @id @default(cuid())
+  agentId           String
+  knowledgeSourceId String
+  agent             Agent           @relation(fields: [agentId], references: [id])
+  knowledgeSource   KnowledgeSource @relation(fields: [knowledgeSourceId], references: [id])
+
+  @@unique([agentId, knowledgeSourceId])
+}
+
+model Handoff {
+  id            String   @id @default(cuid())
+  fromAgentId   String
+  toAgentId     String
+  conditionExpr String?
+  priority      Int      @default(50)
+  createdAt     DateTime @default(now())
+
+  fromAgent Agent @relation("FromAgent", fields: [fromAgentId], references: [id])
+  toAgent   Agent @relation("ToAgent", fields: [toAgentId], references: [id])
+
+  @@unique([fromAgentId, toAgentId])
+}
+
+model RoutingRule {
+  id              String   @id @default(cuid())
+  name            String
+  ownerTeamId     String?
+  ownerTeam       Team?    @relation(fields: [ownerTeamId], references: [id])
+  targetAgentId   String
+  targetAgent     Agent    @relation("RoutingTarget", fields: [targetAgentId], references: [id])
+  fallbackAgentId String?
+  fallbackAgent   Agent?   @relation("RoutingFallback", fields: [fallbackAgentId], references: [id])
+  keywords        Json
+  tags            Json
+  minScore        Float    @default(0.2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AuditLog {
+  id                String   @id @default(cuid())
+  actorId           String?
+  actorRole         String
+  actorTeam         String?
+  action            String
+  entityType        String
+  entityId          String?
+  beforeJson        String?
+  afterJson         String?
+  correlationId     String
+  configVersionHash String
+  denied            Boolean  @default(false)
+  reason            String?
+  messageHash       String?
+  createdAt         DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+}
+
