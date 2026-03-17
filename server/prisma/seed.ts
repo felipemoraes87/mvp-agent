@@ -10,6 +10,7 @@ import {
   ToolPolicy,
   ToolType,
 } from "@prisma/client";
+import path from "node:path";
 import { ensureSchema } from "../src/init-db.js";
 
 const prisma = new PrismaClient();
@@ -27,6 +28,7 @@ const TEAM_SEEDS = [
 
 async function main() {
   await ensureSchema(prisma);
+  const repoRoot = path.resolve(process.cwd(), "..");
 
   const existingTeams = await prisma.team.count();
   if (existingTeams > 0) {
@@ -147,6 +149,49 @@ async function main() {
     });
   }
 
+  const dnrTeamId = teams.get("DNR")!;
+  const falconReportsPath = path.join(repoRoot, "docs", "falcon-rag", "vulnerability-reports");
+  const falconReportsUrl = `file:///${falconReportsPath.replace(/\\/g, "/").replace(/ /g, "%20")}`;
+  const falconEdrAgent = await prisma.agent.create({
+    data: {
+      name: "Falcon EDR Analyst",
+      description: "Analista senior de EDR focado em investigacao, triagem, hunting e correlacao com relatorios de vulnerabilidade no CrowdStrike Falcon.",
+      prompt:
+        "Atue como analista senior de EDR focado em CrowdStrike Falcon. Trabalhe apenas em modo leitura para investigacao, triagem, hunting e recomendacao. " +
+        "Priorize incidentes ativos, deteccoes criticas, persistencia, credential access, lateral movement, beaconing e sinais de ransomware. " +
+        "Use a base local de relatorios de vulnerabilidades para contextualizar exposicao, SLA e prioridade quando houver CVEs, advisories ou backlog de remediacao. " +
+        "Separe fatos observados de inferencias, hipoteses e recomendacoes. Nunca afirme acao executada se nao houve execucao real.",
+      tags: ["dnr", "falcon", "edr", "crowdstrike", "hunting", "specialist", "vuln-context", "cve"],
+      type: AgentType.SPECIALIST,
+      isGlobal: false,
+      visibility: "private",
+      teamId: dnrTeamId,
+      knowledgeMode: "hybrid",
+      knowledgeMaxResults: 6,
+      knowledgeAddReferences: true,
+      knowledgeContextFormat: "yaml",
+    },
+  });
+  specialists.push({ id: falconEdrAgent.id, teamId: dnrTeamId });
+
+  await prisma.handoff.create({
+    data: {
+      fromAgentId: supervisor.id,
+      toAgentId: falconEdrAgent.id,
+      conditionExpr: "falcon edr hunting crowdstrike detections",
+      priority: 85,
+    },
+  });
+
+  await prisma.handoff.create({
+    data: {
+      fromAgentId: falconEdrAgent.id,
+      toAgentId: ticketAgent.id,
+      conditionExpr: "ticket required",
+      priority: 80,
+    },
+  });
+
   const searchKnowledge = await prisma.tool.create({
     data: {
       name: "SearchKnowledge",
@@ -215,6 +260,41 @@ async function main() {
       await prisma.agentKnowledge.create({ data: { agentId: specialist.id, knowledgeSourceId: ks.id } });
     }
   }
+
+  const falconVulnKnowledge = await prisma.knowledgeSource.create({
+    data: {
+      name: "Falcon Vulnerability Reports RAG",
+      url: falconReportsUrl,
+      tags: ["falcon", "edr", "vulnerability", "cve", "remediation", "report", "rag"],
+      sourceType: "folder",
+      sourceConfig: {
+        include: ["**/*.md"],
+        description: "Simulated local RAG corpus for Falcon vulnerability report context.",
+      },
+      chunkSize: 1200,
+      chunkOverlap: 150,
+      chunkStrategy: "markdown",
+      embeddingProvider: "simulated-local",
+      embeddingModel: "mock-text-embedding-001",
+      vectorStoreProvider: "local-simulated",
+      vectorStoreIndex: "falcon-vuln-reports",
+      retrievalMode: "hybrid",
+      searchType: "hybrid",
+      maxResults: 8,
+      rerankerProvider: "simulated-local",
+      rerankerModel: "mock-reranker-001",
+      metadataFilter: { domain: "falcon", corpus: "vulnerability-reports" },
+      contextFormat: "yaml",
+      addContextInstructions: true,
+      addReferences: true,
+      visibility: "private",
+      ownerTeamId: dnrTeamId,
+    },
+  });
+
+  await prisma.agentKnowledge.create({
+    data: { agentId: falconEdrAgent.id, knowledgeSourceId: falconVulnKnowledge.id },
+  });
 
   await prisma.agentTool.create({ data: { agentId: ticketAgent.id, toolId: createTicket.id, canRead: true, canWrite: true } });
 

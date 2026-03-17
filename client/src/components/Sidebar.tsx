@@ -13,22 +13,22 @@ type Divider = { type: "divider" };
 type MenuEntry = NavItem | Divider;
 
 const menu: MenuEntry[] = [
-  { type: "item", to: "/", label: "Dash" },
-  { type: "item", to: "/exec-dashboard", label: "Executive View" },
+  { type: "item", to: "/", label: "Painel" },
+  { type: "item", to: "/exec-dashboard", label: "Visao executiva" },
   { type: "divider" },
-  { type: "item", to: "/agents", label: "Agents" },
-  { type: "item", to: "/tools", label: "Tools" },
+  { type: "item", to: "/agents", label: "Agentes" },
   { type: "item", to: "/skills", label: "Skills" },
-  { type: "item", to: "/knowledge", label: "Knowledge Sources" },
-  { type: "item", to: "/channels", label: "Channels" },
-  { type: "item", to: "/playground", label: "PlayGround" },
-  { type: "item", to: "/graph", label: "Team Graph" },
+  { type: "item", to: "/tools", label: "Ferramentas" },
+  { type: "item", to: "/knowledge", label: "Conhecimento" },
+  { type: "item", to: "/playground", label: "Playground" },
+  { type: "item", to: "/graph", label: "Mapa de times" },
   { type: "divider" },
-  { type: "item", to: "/configuration", label: "Configuration" },
+  { type: "item", to: "/channels", label: "Canais" },
+  { type: "item", to: "/configuration", label: "Configuracao" },
   { type: "item", to: "/debug", label: "Debug" },
   { type: "item", to: "/logs", label: "Logs" },
   { type: "item", to: "/docs", label: "Docs" },
-  { type: "item", to: "/access", label: "Access Mgmt", adminOnly: true },
+  { type: "item", to: "/access", label: "Acesso", adminOnly: true },
 ];
 
 export function Sidebar({ role }: { role?: Role }) {
@@ -37,7 +37,7 @@ export function Sidebar({ role }: { role?: Role }) {
   return (
     <aside className="hidden w-72 shrink-0 border-r border-slate-700/70 bg-[var(--bg-elev)] lg:flex lg:flex-col">
       <div className="border-b border-slate-700/70 px-4 py-4">
-        <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Navigation</div>
+        <div className="text-xs uppercase tracking-[0.16em] text-slate-400">Navegacao</div>
       </div>
 
       <div className="flex-1 overflow-auto px-4 py-4">

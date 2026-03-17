@@ -14,7 +14,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { apiDelete, apiGet, apiPost, apiPut } from "../lib/api";
-import type { AgentWithLinks, Handoff, KnowledgeSource, Team, Tool } from "../lib/types";
+import type { AgentWithLinks, Handoff, KnowledgeSource, Skill, Team, Tool } from "../lib/types";
 import { AgentNode } from "../components/AgentNode";
 import { ConnectionEdge } from "../components/ConnectionEdge";
 import { InspectorPanel } from "../components/InspectorPanel";
@@ -33,24 +33,12 @@ const ALL_TEAMS_VALUE = "__ALL__";
 
 type GraphResponse = { nodes: Array<{ id: string }>; edges: Handoff[] };
 
-type SkillRecord = { id: string; linkedAgentIds: string[] };
 type ChannelRecord = { id: string; enabled: boolean };
 
 function generateAgentSuffix(): string {
   const random = new Uint32Array(1);
   crypto.getRandomValues(random);
   return String(random[0] % 1000).padStart(3, "0");
-}
-
-function readSkillsCount(agentId: string): number {
-  try {
-    const raw = localStorage.getItem("studio.skills.config.v2") || localStorage.getItem("studio.skills.config.v1");
-    if (!raw) return 0;
-    const parsed = JSON.parse(raw) as SkillRecord[];
-    return parsed.filter((skill) => skill.linkedAgentIds.includes(agentId)).length;
-  } catch {
-    return 0;
-  }
 }
 
 function readEnabledChannelsCount(): number {
@@ -200,7 +188,7 @@ function buildResourceDecorations(agent: AgentWithLinks, baseNodes: Node[]): { n
 
   const toolCount = agent.toolLinks?.length || 0;
   const knowledgeCount = agent.knowledgeLinks?.length || 0;
-  const skillCount = readSkillsCount(agent.id) || agent.tags.length;
+  const skillCount = agent.skillLinks?.length || 0;
   const writePermCount = (agent.toolLinks || []).filter((link) => link.canWrite).length;
   const channelCount = readEnabledChannelsCount();
 
@@ -250,6 +238,7 @@ export function GraphPage() { // NOSONAR
   const [teamId, setTeamId] = useState("");
   const [agents, setAgents] = useState<AgentWithLinks[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
+  const [skills, setSkills] = useState<Skill[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeSource[]>([]);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -261,15 +250,17 @@ export function GraphPage() { // NOSONAR
     const teamRes = await apiGet<{ teams: Team[] }>("/api/teams");
     const effectiveTeamId = nextTeamId || teamId || (isAdmin ? ALL_TEAMS_VALUE : teamRes.teams[0]?.id || "");
     const isAllTeams = effectiveTeamId === ALL_TEAMS_VALUE;
-    const [graphRes, agentRes, toolRes, knowledgeRes] = await Promise.all([
+    const [graphRes, agentRes, toolRes, skillRes, knowledgeRes] = await Promise.all([
       apiGet<GraphResponse>(`/api/graph${!isAllTeams && effectiveTeamId ? `?teamId=${effectiveTeamId}` : ""}`),
       apiGet<{ agents: AgentWithLinks[] }>("/api/agents"),
       apiGet<{ tools: Tool[] }>("/api/tools"),
+      apiGet<{ skills: Skill[] }>("/api/skills"),
       apiGet<{ knowledgeSources: KnowledgeSource[] }>("/api/knowledge-sources"),
     ]);
 
     setTeams(teamRes.teams);
     setTools(toolRes.tools);
+    setSkills(skillRes.skills);
     setKnowledge(knowledgeRes.knowledgeSources);
 
     if (teamId !== effectiveTeamId) setTeamId(effectiveTeamId);
@@ -440,6 +431,20 @@ export function GraphPage() { // NOSONAR
     await load(teamId);
   };
 
+  const assignSkill = async (skillId: string) => {
+    if (!selectedAgentId) return;
+    await apiPost(`/api/agents/${selectedAgentId}/skills`, { skillId });
+    await load(teamId);
+  };
+
+  const removeSkill = async (skillId: string) => {
+    if (!selectedAgentId) return;
+    const skillName = skills.find((item) => item.id === skillId)?.name || "this skill";
+    if (!window.confirm(`Remove "${skillName}" from this agent?`)) return;
+    await apiDelete(`/api/agents/${selectedAgentId}/skills/${skillId}`);
+    await load(teamId);
+  };
+
   return (
     <div className="relative h-[calc(100vh-4.5rem)] overflow-hidden rounded-2xl border border-slate-700/70 bg-[var(--bg-elev)]">
       <section className="relative h-full min-w-0 flex-1">
@@ -520,6 +525,7 @@ export function GraphPage() { // NOSONAR
               agent={selectedAgent}
               teams={teams}
               tools={tools}
+              skills={skills}
               knowledge={knowledge}
               onClose={() => setInspectorOpen(false)}
               onSaveConfig={saveConfig}
@@ -527,6 +533,8 @@ export function GraphPage() { // NOSONAR
               onRemoveTool={removeTool}
               onAssignKnowledge={assignKnowledge}
               onRemoveKnowledge={removeKnowledge}
+              onAssignSkill={assignSkill}
+              onRemoveSkill={removeSkill}
             />
           </div>
         </div>

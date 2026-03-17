@@ -35,6 +35,7 @@ export const agentSchema = z.object({
   knowledgeAddReferences: z.boolean().default(true),
   knowledgeContextFormat: z.enum(["json", "yaml"]).optional().nullable(),
   knowledgeFilters: z.any().optional().nullable(),
+  runtimeConfig: z.any().optional().nullable(),
   tags: z.array(z.string()).default([]),
   type: z.enum(["SUPERVISOR", "SPECIALIST", "TICKET"]),
   isGlobal: z.boolean().default(false),
@@ -90,6 +91,18 @@ export const knowledgeSchema = z.object({
   ownerTeamId: z.string(),
 });
 
+export const skillSchema = z.object({
+  name: z.string().min(2),
+  description: z.string().min(2),
+  prompt: z.string().min(8),
+  runbookUrl: z.string().trim().url().optional().nullable().or(z.literal("")),
+  category: z.enum(["operations", "analysis", "compliance", "custom"]),
+  enabled: z.boolean().default(true),
+  visibility: z.enum(["private", "shared"]).default("private"),
+  ownerTeamId: z.string().nullable().optional(),
+  linkedAgentIds: z.array(z.string()).default([]),
+});
+
 export const handoffSchema = z.object({
   fromAgentId: z.string(),
   toAgentId: z.string(),
@@ -114,7 +127,7 @@ export const simulatorSchema = z.object({
   contextTags: z.array(z.string()).default([]),
   advanced: z
     .object({
-      modelProvider: z.enum(["ollama", "openai"]).optional(),
+      modelProvider: z.enum(["ollama", "openrouter", "openai", "vertexai"]).optional(),
       modelId: z.string().min(1).max(120).optional(),
       temperature: z.number().min(0).max(2).optional(),
       maxTokens: z.number().int().min(64).max(8192).optional(),
@@ -143,7 +156,7 @@ export const agnoChatSchema = z.object({
     .default([]),
   advanced: z
     .object({
-      modelProvider: z.enum(["ollama", "openai"]).optional(),
+      modelProvider: z.enum(["ollama", "openrouter", "openai", "vertexai"]).optional(),
       modelId: z.string().min(1).max(120).optional(),
       temperature: z.number().min(0).max(2).optional(),
       maxTokens: z.number().int().min(64).max(8192).optional(),
@@ -204,4 +217,9 @@ export const accessGroupSchema = z.object({
 
 export const accessGroupMembershipSchema = z.object({
   userId: z.string(),
+});
+
+export const customizationProtectionSchema = z.object({
+  userCustomized: z.boolean(),
+  customizationNote: z.string().trim().max(500).optional().nullable(),
 });

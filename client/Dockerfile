@@ -6,6 +6,9 @@ COPY client/package*.json ./
 RUN npm install
 
 COPY client/ ./
+RUN chown -R node:node /workspace/client
+
+USER node
 
 EXPOSE 5173
 

@@ -48,6 +48,34 @@ uvicorn app:app --host 0.0.0.0 --port 8010 --reload
 - `POST /chat`
 - `POST /jumpcloud/execute` (operacoes JumpCloud)
 
+## Falcon MCP (EDR Analyst)
+
+O servico Agno agora consegue ativar consultas read-only ao CrowdStrike Falcon para agentes com perfil/tags de EDR/Falcon, usando `MCPTools`.
+
+Variaveis principais:
+
+```bash
+set FALCON_MCP_ENABLED=true
+set FALCON_MCP_TRANSPORT_MODE=stdio
+set FALCON_MCP_TIMEOUT_SECONDS=90
+set FALCON_CLIENT_ID=<client_id>
+set FALCON_CLIENT_SECRET=<client_secret>
+set FALCON_BASE_URL=https://api.us-2.crowdstrike.com
+```
+
+Opcional para futuro MCP remoto:
+
+```bash
+set FALCON_MCP_TRANSPORT_MODE=sse
+set FALCON_MCP_URL=http://localhost:8080/sse
+```
+
+Observacoes:
+
+- o perfil Falcon EDR opera em modo somente leitura
+- por padrao, o servico expoe apenas um subconjunto dinamico de tools read-only do Falcon, escolhido pela pergunta do usuario
+- para debug/diagnostico, e possivel expor todas as tools configurando `FALCON_MCP_INCLUDE_ALL_TOOLS=true`
+
 ## JumpCloud Tool (completa)
 
 A tool JumpCloud foi adicionada no Agno com:
@@ -63,10 +91,18 @@ Variaveis:
 ```bash
 set JUMPCLOUD_TOOL_ENABLED=true
 set JUMPCLOUD_API_KEY=<sua_api_key>
+set JUMPCLOUD_CLIENT_ID=<seu_client_id>
+set JUMPCLOUD_CLIENT_SECRET=<seu_client_secret>
 set JUMPCLOUD_BASE_URL=https://console.jumpcloud.com
 set JUMPCLOUD_TIMEOUT_SECONDS=30
 set JUMPCLOUD_WRITE_ENABLED=false
 ```
+
+Autenticacao suportada:
+
+- `x-api-key` tradicional com `JUMPCLOUD_API_KEY`
+- `OAuth client_credentials` com `JUMPCLOUD_CLIENT_ID` + `JUMPCLOUD_CLIENT_SECRET`
+- token endpoint padrao para OAuth: `https://admin-oauth.id.jumpcloud.com/oauth2/token`
 
 Exemplo (listar operacoes):
 

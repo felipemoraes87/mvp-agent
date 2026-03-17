@@ -10,9 +10,9 @@ import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import pinoHttp from "pino-http";
 import YAML from "yaml";
-import { AgentType, ToolPolicy, type Prisma, type Role } from "@prisma/client";
+import { AgentType, Prisma, ToolPolicy, type Role } from "@prisma/client";
 import { ZodError } from "zod";
-import { config } from "./config.js";
+import { config, validateConfigForRuntime } from "./config.js";
 import { db } from "./db.js";
 import { logger } from "./logger.js";
 import type { AuthedRequest, SessionUser } from "./types.js";
@@ -28,8 +28,10 @@ import {
   accessUserUpdateSchema,
   agentSchema,
   assignKnowledgeSchema,
+  skillSchema,
   assignToolSchema,
   configImportSchema,
+  customizationProtectionSchema,
   handoffSchema,
   knowledgeSchema,
   loginSchema,
@@ -39,7 +41,7 @@ import {
 } from "./validation.js";
 import { runSimulation } from "./simulator.js";
 import { sha256, validateSafeSimulationInput } from "./security.js";
-import { callAgnoChat, callAgnoSimulate } from "./agno.js";
+import { callAgnoCatalog, callAgnoChat, callAgnoModels, callAgnoSimulate } from "./agno.js";
 
 type ZodSchemaLike<T> = { parse: (data: unknown) => T };
 
@@ -103,8 +105,9 @@ const sensitiveLimiter = rateLimit({
 });
 
 function getReq(req: express.Request): AuthedRequest {
+  const sessionUser = "session" in req && req.session ? req.session.user : undefined;
   return Object.assign(req, {
-    user: req.session.user,
+    user: sessionUser,
     correlationId: String(req.id || nanoid()),
   });
 }
@@ -167,6 +170,18 @@ function fallbackReasoningSummary(type: string, text: string): string[] {
     `Pontos centrais considerados: ${signalLabel}.`,
     "Definicao de recomendacoes e eventual escalonamento.",
   ];
+}
+
+function isRuntimeManaged(managedBy?: string | null): boolean {
+  return managedBy === "agno";
+}
+
+function isUserCustomized(entity: { userCustomized?: boolean | null } | null | undefined): boolean {
+  return Boolean(entity?.userCustomized);
+}
+
+function formatCustomizationWarning(entityType: string, entityName: string, note?: string | null): string {
+  return `${entityType} "${entityName}" foi preservado porque esta marcado como customizacao do usuario${note ? ` (${note})` : ""}.`;
 }
 
 function ensureCsrf(req: express.Request, res: express.Response, next: express.NextFunction): void {
@@ -689,7 +704,11 @@ app.get("/api/agents", async (req, res) => {
   const user = getReq(req).user!;
   const agents = await db.agent.findMany({
     where: user.role === "TEAM_MAINTAINER" ? { OR: [{ teamId: user.teamId || "" }, { visibility: "shared" }, { isGlobal: true }] } : {},
-    include: { toolLinks: { include: { tool: true } }, knowledgeLinks: { include: { knowledgeSource: true } } },
+    include: {
+      toolLinks: { include: { tool: true } },
+      knowledgeLinks: { include: { knowledgeSource: true } },
+      skillLinks: { include: { skill: true } },
+    },
     orderBy: [{ visibility: "desc" }, { isGlobal: "desc" }, { name: "asc" }],
   });
   res.json({ agents });
@@ -752,6 +771,45 @@ app.put("/api/agents/:id", async (req, res) => {
   res.json({ agent: updated });
 });
 
+app.put("/api/agents/:id/customization", async (req, res) => {
+  const r = getReq(req);
+  const current = await db.agent.findUnique({ where: { id: req.params.id } });
+  if (!current) return res.status(404).json({ error: "Agent not found" });
+
+  if (!canMutateTeamResource(r.user!, current.teamId, current.isGlobal)) {
+    await auditDenied(r, "agent:customization", "Not allowed for this team/global scope", "agent");
+    return res.status(403).json({ error: "Policy denied" });
+  }
+
+  const pol = evaluatePolicy({ actor: r.user!, action: "agent:update", ownerTeamId: current.teamId, agent: current });
+  if (!pol.allow) {
+    await auditDenied(r, "agent:customization", pol.reason || "Denied", "agent");
+    return res.status(403).json({ error: pol.reason || "Denied" });
+  }
+
+  const input = parse(customizationProtectionSchema, req.body);
+  const updated = await db.agent.update({
+    where: { id: current.id },
+    data: {
+      userCustomized: input.userCustomized,
+      customizationNote: input.customizationNote?.trim() || null,
+      customizationUpdatedAt: input.userCustomized ? new Date() : null,
+    },
+  });
+  await writeAudit({
+    actorId: r.user!.id,
+    actorRole: r.user!.role,
+    actorTeam: r.user!.teamId,
+    action: "agent:customization",
+    entityType: "agent",
+    entityId: updated.id,
+    beforeJson: current,
+    afterJson: updated,
+    correlationId: r.correlationId,
+  });
+  res.json({ agent: updated });
+});
+
 app.delete("/api/agents/:id", async (req, res) => {
   const r = getReq(req);
   const current = await db.agent.findUnique({ where: { id: req.params.id } });
@@ -760,7 +818,32 @@ app.delete("/api/agents/:id", async (req, res) => {
     await auditDenied(r, "agent:delete", "Not allowed for this team/global scope", "agent");
     return res.status(403).json({ error: "Policy denied" });
   }
-  await db.agent.delete({ where: { id: current.id } });
+  try {
+    await db.$transaction(async (tx) => {
+      await tx.agentTool.deleteMany({ where: { agentId: current.id } });
+      await tx.agentSkill.deleteMany({ where: { agentId: current.id } });
+      await tx.agentKnowledge.deleteMany({ where: { agentId: current.id } });
+      await tx.handoff.deleteMany({
+        where: {
+          OR: [{ fromAgentId: current.id }, { toAgentId: current.id }],
+        },
+      });
+      await tx.routingRule.deleteMany({ where: { targetAgentId: current.id } });
+      await tx.routingRule.updateMany({
+        where: { fallbackAgentId: current.id },
+        data: { fallbackAgentId: null },
+      });
+      await tx.agent.delete({ where: { id: current.id } });
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      return res.status(409).json({
+        error: "Agent cannot be removed because it is still referenced by other records.",
+        correlationId: r.correlationId,
+      });
+    }
+    throw error;
+  }
   await writeAudit({
     actorId: r.user!.id,
     actorRole: r.user!.role,
@@ -877,6 +960,52 @@ app.delete("/api/agents/:id/knowledge/:knowledgeSourceId", async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/agents/:id/skills", async (req, res) => {
+  const r = getReq(req);
+  const agent = await db.agent.findUnique({ where: { id: req.params.id } });
+  if (!agent) return res.status(404).json({ error: "Agent not found" });
+  if (!canMutateTeamResource(r.user!, agent.teamId, agent.isGlobal)) {
+    await auditDenied(r, "agent:assign-skill", "Scope denied", "agent_skill");
+    return res.status(403).json({ error: "Policy denied" });
+  }
+
+  const skillId = typeof req.body?.skillId === "string" ? req.body.skillId : "";
+  if (!skillId) return res.status(400).json({ error: "skillId is required" });
+
+  const skill = await db.skill.findUnique({ where: { id: skillId } });
+  if (!skill) return res.status(404).json({ error: "Skill not found" });
+  if (!canReadTeamResource(r.user!, skill.ownerTeamId, skill.visibility, false)) {
+    return res.status(403).json({ error: "Skill visibility denied" });
+  }
+
+  const link = await db.agentSkill.upsert({
+    where: { agentId_skillId: { agentId: agent.id, skillId: skill.id } },
+    update: {},
+    create: { agentId: agent.id, skillId: skill.id },
+  });
+
+  await writeAudit({
+    actorId: r.user!.id,
+    actorRole: r.user!.role,
+    actorTeam: r.user!.teamId,
+    action: "agent:assign-skill",
+    entityType: "agent_skill",
+    entityId: link.id,
+    afterJson: link,
+    correlationId: r.correlationId,
+  });
+  res.status(201).json({ link });
+});
+
+app.delete("/api/agents/:id/skills/:skillId", async (req, res) => {
+  const r = getReq(req);
+  const agent = await db.agent.findUnique({ where: { id: req.params.id } });
+  if (!agent) return res.status(404).json({ error: "Agent not found" });
+  if (!canMutateTeamResource(r.user!, agent.teamId, agent.isGlobal)) return res.status(403).json({ error: "Policy denied" });
+  await db.agentSkill.delete({ where: { agentId_skillId: { agentId: req.params.id, skillId: req.params.skillId } } });
+  res.json({ ok: true });
+});
+
 app.get("/api/tools", async (req, res) => {
   const user = getReq(req).user!;
   const tools = await db.tool.findMany({
@@ -909,6 +1038,9 @@ app.put("/api/tools/:id", async (req, res) => {
   const r = getReq(req);
   const current = await db.tool.findUnique({ where: { id: req.params.id } });
   if (!current) return res.status(404).json({ error: "Tool not found" });
+  if (isRuntimeManaged(current.managedBy)) {
+    return res.status(409).json({ error: "Runtime-managed tools must be changed in Agno/MCP runtime, not in the portal." });
+  }
   const input = parse(toolSchema, req.body);
 
   const pol = evaluatePolicy({ actor: r.user!, action: "tool:update", ownerTeamId: current.teamId, tool: current });
@@ -925,10 +1057,40 @@ app.put("/api/tools/:id", async (req, res) => {
   res.json({ tool: updated });
 });
 
+app.put("/api/tools/:id/customization", async (req, res) => {
+  const r = getReq(req);
+  const current = await db.tool.findUnique({ where: { id: req.params.id } });
+  if (!current) return res.status(404).json({ error: "Tool not found" });
+
+  const pol = evaluatePolicy({ actor: r.user!, action: "tool:update", ownerTeamId: current.teamId, tool: current });
+  if (!pol.allow) {
+    await auditDenied(r, "tool:customization", pol.reason || "Denied", "tool");
+    return res.status(403).json({ error: pol.reason || "Denied" });
+  }
+  if (r.user!.role === "TEAM_MAINTAINER" && current.teamId !== r.user!.teamId) {
+    return res.status(403).json({ error: "Team scope denied" });
+  }
+
+  const input = parse(customizationProtectionSchema, req.body);
+  const updated = await db.tool.update({
+    where: { id: current.id },
+    data: {
+      userCustomized: input.userCustomized,
+      customizationNote: input.customizationNote?.trim() || null,
+      customizationUpdatedAt: input.userCustomized ? new Date() : null,
+    },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "tool:customization", entityType: "tool", entityId: updated.id, beforeJson: current, afterJson: updated, correlationId: r.correlationId });
+  res.json({ tool: updated });
+});
+
 app.delete("/api/tools/:id", async (req, res) => {
   const r = getReq(req);
   const current = await db.tool.findUnique({ where: { id: req.params.id } });
   if (!current) return res.status(404).json({ error: "Tool not found" });
+  if (isRuntimeManaged(current.managedBy)) {
+    return res.status(409).json({ error: "Runtime-managed tools cannot be deleted from the portal." });
+  }
   if (!canMutateTeamResource(r.user!, current.teamId, false)) return res.status(403).json({ error: "Policy denied" });
   await db.tool.delete({ where: { id: current.id } });
   await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "tool:delete", entityType: "tool", entityId: current.id, beforeJson: current, correlationId: r.correlationId });
@@ -942,6 +1104,115 @@ app.get("/api/knowledge-sources", async (req, res) => {
     orderBy: { name: "asc" },
   });
   res.json({ knowledgeSources: items });
+});
+
+app.get("/api/skills", async (req, res) => {
+  const user = getReq(req).user!;
+  const items = await db.skill.findMany({
+    where: user.role === "TEAM_MAINTAINER" ? { OR: [{ ownerTeamId: user.teamId || "" }, { visibility: "shared" }] } : {},
+    include: { agentLinks: true },
+    orderBy: { name: "asc" },
+  });
+  res.json({
+    skills: items.map((item) => ({
+      ...item,
+      linkedAgentIds: item.agentLinks.map((link: { agentId: string }) => link.agentId),
+    })),
+  });
+});
+
+app.post("/api/skills", async (req, res) => {
+  const r = getReq(req);
+  const input = parse(skillSchema, req.body);
+  if (!canMutateTeamResource(r.user!, input.ownerTeamId || null, false)) return res.status(403).json({ error: "Policy denied" });
+
+  const skill = await db.skill.create({
+    data: {
+      name: input.name,
+      description: input.description,
+      prompt: input.prompt,
+      runbookUrl: input.runbookUrl || null,
+      category: input.category,
+      enabled: input.enabled,
+      visibility: input.visibility,
+      ownerTeamId: input.ownerTeamId || null,
+      managedBy: "portal",
+      runtimeSource: null,
+      agentLinks: input.linkedAgentIds.length
+        ? { create: input.linkedAgentIds.map((agentId) => ({ agentId })) }
+        : undefined,
+    },
+    include: { agentLinks: true },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "skill:create", entityType: "skill", entityId: skill.id, afterJson: skill, correlationId: r.correlationId });
+  res.status(201).json({ skill: { ...skill, linkedAgentIds: skill.agentLinks.map((link: { agentId: string }) => link.agentId) } });
+});
+
+app.put("/api/skills/:id", async (req, res) => {
+  const r = getReq(req);
+  const current = await db.skill.findUnique({ where: { id: req.params.id }, include: { agentLinks: true } });
+  if (!current) return res.status(404).json({ error: "Skill not found" });
+  if (isRuntimeManaged(current.managedBy)) {
+    return res.status(409).json({ error: "Runtime-managed skills must be changed in Agno runtime, not in the portal." });
+  }
+  if (!canMutateTeamResource(r.user!, current.ownerTeamId, false)) return res.status(403).json({ error: "Policy denied" });
+
+  const input = parse(skillSchema, req.body);
+  const updated = await db.skill.update({
+    where: { id: current.id },
+    data: {
+      name: input.name,
+      description: input.description,
+      prompt: input.prompt,
+      runbookUrl: input.runbookUrl || null,
+      category: input.category,
+      enabled: input.enabled,
+      visibility: input.visibility,
+      ownerTeamId: input.ownerTeamId || null,
+      managedBy: current.managedBy || "portal",
+      runtimeSource: current.runtimeSource || null,
+      agentLinks: {
+        deleteMany: {},
+        create: input.linkedAgentIds.map((agentId) => ({ agentId })),
+      },
+    },
+    include: { agentLinks: true },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "skill:update", entityType: "skill", entityId: updated.id, beforeJson: current, afterJson: updated, correlationId: r.correlationId });
+  res.json({ skill: { ...updated, linkedAgentIds: updated.agentLinks.map((link: { agentId: string }) => link.agentId) } });
+});
+
+app.put("/api/skills/:id/customization", async (req, res) => {
+  const r = getReq(req);
+  const current = await db.skill.findUnique({ where: { id: req.params.id }, include: { agentLinks: true } });
+  if (!current) return res.status(404).json({ error: "Skill not found" });
+  if (!canMutateTeamResource(r.user!, current.ownerTeamId, false)) return res.status(403).json({ error: "Policy denied" });
+
+  const input = parse(customizationProtectionSchema, req.body);
+  const updated = await db.skill.update({
+    where: { id: current.id },
+    data: {
+      userCustomized: input.userCustomized,
+      customizationNote: input.customizationNote?.trim() || null,
+      customizationUpdatedAt: input.userCustomized ? new Date() : null,
+    },
+    include: { agentLinks: true },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "skill:customization", entityType: "skill", entityId: updated.id, beforeJson: current, afterJson: updated, correlationId: r.correlationId });
+  res.json({ skill: { ...updated, linkedAgentIds: updated.agentLinks.map((link: { agentId: string }) => link.agentId) } });
+});
+
+app.delete("/api/skills/:id", async (req, res) => {
+  const r = getReq(req);
+  const current = await db.skill.findUnique({ where: { id: req.params.id } });
+  if (!current) return res.status(404).json({ error: "Skill not found" });
+  if (isRuntimeManaged(current.managedBy)) {
+    return res.status(409).json({ error: "Runtime-managed skills cannot be deleted from the portal." });
+  }
+  if (!canMutateTeamResource(r.user!, current.ownerTeamId, false)) return res.status(403).json({ error: "Policy denied" });
+  await db.skill.delete({ where: { id: current.id } });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "skill:delete", entityType: "skill", entityId: current.id, beforeJson: current, correlationId: r.correlationId });
+  res.json({ ok: true });
 });
 
 app.post("/api/knowledge-sources", async (req, res) => {
@@ -961,6 +1232,25 @@ app.put("/api/knowledge-sources/:id", async (req, res) => {
   const input = parse(knowledgeSchema, req.body);
   const updated = await db.knowledgeSource.update({ where: { id: current.id }, data: { ...input, tags: input.tags, visibility: input.visibility } });
   await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "knowledge:update", entityType: "knowledge_source", entityId: updated.id, beforeJson: current, afterJson: updated, correlationId: r.correlationId });
+  res.json({ knowledgeSource: updated });
+});
+
+app.put("/api/knowledge-sources/:id/customization", async (req, res) => {
+  const r = getReq(req);
+  const current = await db.knowledgeSource.findUnique({ where: { id: req.params.id } });
+  if (!current) return res.status(404).json({ error: "Knowledge source not found" });
+  if (!canMutateTeamResource(r.user!, current.ownerTeamId, false)) return res.status(403).json({ error: "Policy denied" });
+
+  const input = parse(customizationProtectionSchema, req.body);
+  const updated = await db.knowledgeSource.update({
+    where: { id: current.id },
+    data: {
+      userCustomized: input.userCustomized,
+      customizationNote: input.customizationNote?.trim() || null,
+      customizationUpdatedAt: input.userCustomized ? new Date() : null,
+    },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "knowledge:customization", entityType: "knowledge_source", entityId: updated.id, beforeJson: current, afterJson: updated, correlationId: r.correlationId });
   res.json({ knowledgeSource: updated });
 });
 
@@ -1106,7 +1396,7 @@ app.post("/api/simulator/run", async (req, res) => {
     return res.status(403).json({ error: "Policy denied" });
   }
 
-  const agnoResult = config.agnoEnabled && !forcedAgent
+  const agnoResponse = config.agnoEnabled && !forcedAgent
     ? await callAgnoSimulate(config.agnoBaseUrl, {
         message: safety.sanitized,
         suggestedTeamId: input.suggestedTeamId,
@@ -1132,8 +1422,12 @@ app.post("/api/simulator/run", async (req, res) => {
           tags: rule.tags,
         })),
         advanced: input.advanced,
-      })
+      }, r.correlationId)
     : null;
+  const agnoResult = agnoResponse?.data || null;
+  if (agnoResponse?.error) {
+    logger.warn({ correlationId: r.correlationId, error: agnoResponse.error }, "agno_simulate_fallback");
+  }
 
   let result =
     agnoResult ||
@@ -1163,6 +1457,7 @@ app.post("/api/simulator/run", async (req, res) => {
     afterJson: {
       messageHash: sha256(safety.sanitized),
       usedAgno: Boolean(agnoResult),
+      agnoError: agnoResponse?.error || null,
       forcedAgentId: input.forcedAgentId || null,
       modelProvider: input.advanced?.modelProvider || null,
       modelId: input.advanced?.modelId || null,
@@ -1187,7 +1482,12 @@ app.post("/api/agno/chat", async (req, res) => {
   }
 
   const team = agent.teamId ? await db.team.findUnique({ where: { id: agent.teamId } }) : null;
-  const agno = config.agnoEnabled
+  const [toolLinks, knowledgeLinks, skillLinks] = await Promise.all([
+    db.agentTool.findMany({ where: { agentId: agent.id }, include: { tool: true } }),
+    db.agentKnowledge.findMany({ where: { agentId: agent.id }, include: { knowledgeSource: true } }),
+    db.agentSkill.findMany({ where: { agentId: agent.id }, include: { skill: true } }),
+  ]);
+  const agnoResponse = config.agnoEnabled
     ? await callAgnoChat(config.agnoBaseUrl, {
         message: safety.sanitized,
         history: input.history,
@@ -1200,9 +1500,46 @@ app.post("/api/agno/chat", async (req, res) => {
           prompt: agent.prompt,
           tags: agent.tags,
           teamKey: team?.key,
+          tools: toolLinks.map((link) => ({
+            id: link.tool.id,
+            name: link.tool.name,
+            description: link.tool.description,
+            callName: link.tool.callName,
+            policy: link.tool.policy,
+            type: link.tool.type,
+            transport: link.tool.transport,
+            mode: link.tool.mode,
+            canRead: link.canRead,
+            canWrite: link.canWrite,
+            managedBy: link.tool.managedBy || "portal",
+            runtimeSource: link.tool.runtimeSource || null,
+          })),
+          knowledgeSources: knowledgeLinks.map((link) => ({
+            id: link.knowledgeSource.id,
+            name: link.knowledgeSource.name,
+            url: link.knowledgeSource.url,
+            tags: link.knowledgeSource.tags,
+            sourceType: link.knowledgeSource.sourceType,
+          })),
+          runtimeConfig: agent.runtimeConfig,
+          skills: skillLinks.map((link) => ({
+            id: link.skill.id,
+            name: link.skill.name,
+            description: link.skill.description,
+            prompt: link.skill.prompt,
+            category: link.skill.category,
+            enabled: link.skill.enabled,
+            runbookUrl: link.skill.runbookUrl,
+            managedBy: link.skill.managedBy,
+            runtimeSource: link.skill.runtimeSource,
+          })),
         },
-      })
+      }, r.correlationId)
     : null;
+  const agno = agnoResponse?.data || null;
+  if (agnoResponse?.error) {
+    logger.warn({ correlationId: r.correlationId, agentId: agent.id, error: agnoResponse.error }, "agno_chat_fallback");
+  }
 
   const reply = agno?.reply || fallbackAgentReply(agent.type, agent.name, safety.sanitized);
   const reasoningSummary = agno?.reasoningSummary?.length
@@ -1220,28 +1557,39 @@ app.post("/api/agno/chat", async (req, res) => {
       agentId: agent.id,
       messageHash: sha256(safety.sanitized),
       usedAgno: Boolean(agno),
+      agnoError: agnoResponse?.error || null,
       modelProvider: input.advanced?.modelProvider || null,
       modelId: input.advanced?.modelId || null,
     },
   });
 
-  res.json({ reply, reasoningSummary, meta: agno?.meta || { usedAgno: false } });
+  res.json({
+    reply,
+    reasoningSummary,
+    meta: {
+      ...(agno?.meta || { usedAgno: false }),
+      degraded: Boolean(agnoResponse?.error),
+      agnoError: agnoResponse?.error || null,
+    },
+  });
 });
 
 async function exportConfigBundle() {
-  const [teams, users, agents, tools, agentTools, knowledgeSources, agentKnowledge, handoffs, routingRules] = await Promise.all([
+  const [teams, users, agents, tools, skills, agentTools, agentKnowledge, agentSkills, knowledgeSources, handoffs, routingRules] = await Promise.all([
     db.team.findMany(),
     db.user.findMany({ select: { id: true, email: true, role: true, teamId: true } }),
     db.agent.findMany(),
     db.tool.findMany(),
+    db.skill.findMany(),
     db.agentTool.findMany(),
-    db.knowledgeSource.findMany(),
     db.agentKnowledge.findMany(),
+    db.agentSkill.findMany(),
+    db.knowledgeSource.findMany(),
     db.handoff.findMany(),
     db.routingRule.findMany(),
   ]);
 
-  const payload = { teams, users, agents, tools, agentTools, knowledgeSources, agentKnowledge, handoffs, routingRules };
+  const payload = { teams, users, agents, tools, skills, agentTools, knowledgeSources, agentKnowledge, agentSkills, handoffs, routingRules };
   const raw = JSON.stringify(payload);
   return {
     exportedAt: new Date().toISOString(),
@@ -1280,24 +1628,29 @@ app.post("/api/config/import", async (req, res) => {
     return res.status(400).json({ error: "Config signature mismatch" });
   }
 
-  const tools = parsed.payload.tools as Array<{ policy: string; name: string }>;
+  const tools = parsed.payload.tools as Array<{ id: string; policy: string; name: string }>;
   const agents = parsed.payload.agents as Array<{ id: string; type: string }>;
   const links = parsed.payload.agentTools as Array<{ agentId: string; toolId: string; canWrite: boolean }>;
 
   for (const link of links) {
     const agent = agents.find((a) => a.id === link.agentId);
-    const tool = tools.find((t) => t.name && t === t && parsed.payload.tools.some((x: any) => x.id === link.toolId));
+    const tool = tools.find((t) => t.id === link.toolId);
     if (link.canWrite && agent?.type !== "TICKET") {
       return res.status(400).json({ error: "Import policy violation: write tool assigned to non-ticket agent." });
+    }
+    if (!agent || !tool) {
+      return res.status(400).json({ error: "Import policy violation: invalid agent/tool link detected." });
     }
   }
 
   await db.$transaction(async (tx) => {
     await tx.handoff.deleteMany();
     await tx.agentKnowledge.deleteMany();
+    await tx.agentSkill.deleteMany();
     await tx.agentTool.deleteMany();
     await tx.routingRule.deleteMany();
     await tx.knowledgeSource.deleteMany();
+    await tx.skill.deleteMany();
     await tx.tool.deleteMany();
     await tx.agent.deleteMany();
     await tx.team.deleteMany();
@@ -1305,9 +1658,11 @@ app.post("/api/config/import", async (req, res) => {
     for (const t of parsed.payload.teams) await tx.team.create({ data: t });
     for (const a of parsed.payload.agents) await tx.agent.create({ data: a });
     for (const t of parsed.payload.tools) await tx.tool.create({ data: t });
+    for (const s of parsed.payload.skills || []) await tx.skill.create({ data: s });
     for (const k of parsed.payload.knowledgeSources) await tx.knowledgeSource.create({ data: k });
     for (const at of parsed.payload.agentTools) await tx.agentTool.create({ data: at });
     for (const ak of parsed.payload.agentKnowledge) await tx.agentKnowledge.create({ data: ak });
+    for (const ask of parsed.payload.agentSkills || []) await tx.agentSkill.create({ data: ask });
     for (const h of parsed.payload.handoffs) await tx.handoff.create({ data: h });
     for (const rr of parsed.payload.routingRules) await tx.routingRule.create({ data: rr });
   });
@@ -1323,6 +1678,137 @@ app.post("/api/config/import", async (req, res) => {
   });
 
   res.json({ ok: true });
+});
+
+app.post("/api/catalog/sync", ensureAdmin, async (req, res) => {
+  if (!config.agnoEnabled) return res.status(400).json({ error: "Agno integration disabled" });
+  const catalogResponse = await callAgnoCatalog(config.agnoBaseUrl, getReq(req).correlationId);
+  const catalog = catalogResponse.data;
+  if (!catalog) return res.status(502).json({ error: catalogResponse.error || "Failed to fetch Agno catalog" });
+
+  const teamByKey = new Map((await db.team.findMany()).map((team) => [team.key, team]));
+  const skipped: string[] = [];
+  let syncedTools = 0;
+  let syncedSkills = 0;
+
+  for (const tool of catalog.tools) {
+    const ownerTeam = tool.ownerTeamKey ? teamByKey.get(tool.ownerTeamKey) : null;
+    const currentTool = await db.tool.findUnique({ where: { name: tool.name } });
+    if (isUserCustomized(currentTool)) {
+      skipped.push(formatCustomizationWarning("Tool", tool.name, currentTool?.customizationNote));
+      continue;
+    }
+    await db.tool.upsert({
+      where: { name: tool.name },
+      update: {
+        description: tool.description || null,
+        callName: tool.callName || null,
+        transport: tool.transport || "internal",
+        endpoint: null,
+        method: "POST",
+        authRef: null,
+        timeoutMs: 30000,
+        type: tool.type as Prisma.ToolUncheckedCreateInput["type"],
+        mode: (tool.mode || "real") as Prisma.ToolUncheckedCreateInput["mode"],
+        policy: tool.policy as Prisma.ToolUncheckedCreateInput["policy"],
+        riskLevel: "low",
+        dataClassificationIn: "internal",
+        dataClassificationOut: "internal",
+        inputSchema: {},
+        outputSchema: {},
+        rateLimitPerMinute: 120,
+        visibility: tool.visibility === "shared" ? "shared" : "private",
+        managedBy: "agno",
+        runtimeSource: tool.runtimeSource || "agno",
+        teamId: ownerTeam?.id || null,
+      },
+      create: {
+        name: tool.name,
+        description: tool.description || null,
+        callName: tool.callName || null,
+        transport: tool.transport || "internal",
+        endpoint: null,
+        method: "POST",
+        authRef: null,
+        timeoutMs: 30000,
+        type: tool.type as Prisma.ToolUncheckedCreateInput["type"],
+        mode: (tool.mode || "real") as Prisma.ToolUncheckedCreateInput["mode"],
+        policy: tool.policy as Prisma.ToolUncheckedCreateInput["policy"],
+        riskLevel: "low",
+        dataClassificationIn: "internal",
+        dataClassificationOut: "internal",
+        inputSchema: {},
+        outputSchema: {},
+        rateLimitPerMinute: 120,
+        visibility: tool.visibility === "shared" ? "shared" : "private",
+        managedBy: "agno",
+        runtimeSource: tool.runtimeSource || "agno",
+        teamId: ownerTeam?.id || null,
+      },
+    });
+    syncedTools += 1;
+  }
+
+  for (const skill of catalog.skills) {
+    const ownerTeam = skill.ownerTeamKey ? teamByKey.get(skill.ownerTeamKey) : null;
+    const currentSkill = await db.skill.findFirst({
+      where: { name: skill.name, ownerTeamId: ownerTeam?.id || null },
+    });
+    if (isUserCustomized(currentSkill)) {
+      skipped.push(formatCustomizationWarning("Skill", skill.name, currentSkill?.customizationNote));
+      continue;
+    }
+    if (currentSkill) {
+      await db.skill.update({
+        where: { id: currentSkill.id },
+        data: {
+          description: skill.description || "",
+          prompt: skill.prompt,
+          runbookUrl: skill.runbookUrl || null,
+          category: skill.category as Prisma.SkillUncheckedCreateInput["category"],
+          enabled: skill.enabled,
+          visibility: skill.visibility === "shared" ? "shared" : "private",
+          ownerTeamId: ownerTeam?.id || null,
+          managedBy: "agno",
+          runtimeSource: skill.runtimeSource || "agno",
+        },
+      });
+      syncedSkills += 1;
+      continue;
+    }
+    await db.skill.create({
+      data: {
+        description: skill.description || "",
+        prompt: skill.prompt,
+        runbookUrl: skill.runbookUrl || null,
+        category: skill.category as Prisma.SkillUncheckedCreateInput["category"],
+        enabled: skill.enabled,
+        visibility: skill.visibility === "shared" ? "shared" : "private",
+        ownerTeamId: ownerTeam?.id || null,
+        managedBy: "agno",
+        runtimeSource: skill.runtimeSource || "agno",
+        name: skill.name,
+      },
+    });
+    syncedSkills += 1;
+  }
+
+  res.json({
+    ok: true,
+    tools: syncedTools,
+    skills: syncedSkills,
+    knowledgeSources: catalog.knowledgeSources.length,
+    skipped,
+  });
+});
+
+app.get("/api/agno/models", async (req, res) => {
+  if (!config.agnoEnabled) return res.status(400).json({ error: "Agno integration disabled" });
+  const modelsResponse = await callAgnoModels(config.agnoBaseUrl, getReq(req).correlationId);
+  if (!modelsResponse.data) {
+    return res.status(502).json({ error: modelsResponse.error || "Failed to fetch Agno models" });
+  }
+  res.json(modelsResponse.data);
 });
 
 app.get("/api/audit-logs", async (req, res) => {
@@ -1351,6 +1837,7 @@ async function cleanupOldAudits() {
 }
 
 app.listen(config.port, async () => {
+  validateConfigForRuntime();
   await ensureSchema(db);
   await cleanupOldAudits();
   logger.info({ port: config.port }, "server_started");

@@ -12,10 +12,17 @@ server/node_modules/
 server/dist/
 server/prisma/dev.db
 server/prisma/*.db-journal
+server/runtime-sqlite-export.json
 
 agno_service/.venv/
 agno_service/__pycache__/
 agno_service/*.pyc
+agno_service/tests/__pycache__/
+secrets/
+
+*.log
+tmp_falcon_*.json
+reports/
 
 .DS_Store
 Thumbs.db

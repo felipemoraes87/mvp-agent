@@ -8,7 +8,8 @@ Integracao Agno implementada seguindo os conceitos da documentacao oficial: `htt
 
 1. `PROJECT_CONTEXT.md` (contexto tecnico detalhado para novas sessoes de coding)
 2. `GUI_GUIDE_PTBR.md` (guia funcional tela a tela)
-3. Este `README.md` (setup, operacao e troubleshooting)
+3. `docs/gcp-deployment-architecture.md` (arquitetura e deploy ideal em GCP)
+4. Este `README.md` (setup, operacao e troubleshooting)
 
 ## Stack
 
@@ -17,7 +18,7 @@ Integracao Agno implementada seguindo os conceitos da documentacao oficial: `htt
 - Agno service: Python + FastAPI + Agno
 - LLM local: Ollama (default `qwen2.5:3b`)
 - LLM opcional via API: OpenAI (ex.: `gpt-4o-mini`)
-- DB: SQLite (Prisma Client)
+- DB: PostgreSQL (Prisma Client)
 - Auth: sessoes com cookie httpOnly + bcrypt
 - Security middleware: helmet + rate-limit + CSRF
 - Validation: zod
@@ -86,7 +87,7 @@ Para parar:
 docker compose down
 ```
 
-Para parar removendo volumes (zera banco SQLite e cache Ollama):
+Para parar removendo volumes (zera banco Postgres e cache Ollama):
 
 ```bash
 docker compose down -v
@@ -105,6 +106,12 @@ Variaveis opcionais para o compose (shell):
 - `OPENAI_API_KEY` (obrigatorio quando provider = `openai`)
 - `OPENAI_BASE_URL` (opcional)
 - `OPENAI_ORG` (opcional)
+- `FALCON_MCP_ENABLED` (habilita integracao Falcon no agno_service)
+- `FALCON_MCP_TRANSPORT_MODE` (`stdio` para comando local ou transporte remoto como `sse`)
+- `FALCON_MCP_URL` (endpoint MCP remoto futuro)
+- `FALCON_MCP_TIMEOUT_SECONDS` (default `90`)
+- `FALCON_MCP_INCLUDE_ALL_TOOLS` (`false` por default; mantem o agente em subset read-only dinamico)
+- `FALCON_CLIENT_ID`, `FALCON_CLIENT_SECRET`, `FALCON_BASE_URL` (necessarios no modo `stdio`)
 
 ## Setup Manual (Sem Docker)
 
@@ -172,9 +179,10 @@ Importante: para acesso em rede local por IP, ajuste `APP_ORIGIN`/`APP_ORIGINS` 
 - `npm run build` compila TypeScript
 - `npm run start` roda build compilado
 - `npm run prisma:generate` gera Prisma Client
-- `npm run prisma:migrate` inicializa schema SQLite local
+- `npm run prisma:migrate` aplica migrations Prisma no Postgres
 - `npm run prisma:seed` popula base inicial
 - `npm run context:apply` aplica contexto por dominio (playbooks/tags/keywords)
+- `npm run bootstrap` executa import legado opcional + seed + context + catalog sync
 
 ### Client (`client/package.json`)
 
@@ -199,8 +207,9 @@ Importante: para acesso em rede local por IP, ajuste `APP_ORIGIN`/`APP_ORIGINS` 
   - HRM, IAM/IGA, CloudSec, CorpSec, AppSec, OffSec, Detection&Response, Vuln Mgmt
 - Agentes:
   - 1 Supervisor global
-  - 1 Specialist por time
-  - 1 Ticket Agent global
+- 1 Specialist por time
+- 1 especialista adicional `Falcon EDR Analyst` no time `Detection&Response`
+- 1 Ticket Agent global
 - Tools mock:
   - `SearchKnowledge` (read)
   - `LookupRunbook` (read)
@@ -263,14 +272,14 @@ Causa comum: backend fora do ar.
 
 ### Prisma / schema local
 
-- Este projeto usa inicializacao de schema SQLite via `scripts/migrate.ts` + `src/init-db.ts`
-- Se houver erro de schema, rode novamente:
-  - `npm run prisma:generate`
-  - `npm run prisma:migrate`
+- Este projeto usa migrations versionadas Prisma em `server/prisma/migrations`
+  - Se houver erro de schema, rode novamente:
+    - `npm run prisma:generate`
+    - `npm run prisma:migrate`
 
 ## Variaveis de Ambiente (server/.env)
 
-- `DATABASE_URL=file:./dev.db`
+- `DATABASE_URL=postgresql://...`
 - `PORT=8787`
 - `APP_ORIGIN=http://localhost:5173`
 - `APP_ORIGINS=`

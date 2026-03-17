@@ -11,12 +11,17 @@ COPY server/tsconfig.json ./
 COPY server/prisma ./prisma
 COPY server/scripts ./scripts
 COPY server/src ./src
+COPY server/docker-entrypoint.sh ./docker-entrypoint.sh
 COPY docs ../docs
 
 RUN mkdir -p runtime
 RUN npm run prisma:generate
 RUN npm run build
+RUN chmod +x /workspace/server/docker-entrypoint.sh
+RUN chown -R node:node /workspace/server
+
+USER node
 
 EXPOSE 8787
 
-CMD ["sh", "-c", "npm run prisma:migrate && (npm run prisma:seed || true) && npm run start"]
+CMD ["./docker-entrypoint.sh"]

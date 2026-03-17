@@ -1,4 +1,23 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mvp-postgres
+    secrets:
+      - source: postgres_password
+        target: postgres_password
+    environment:
+      POSTGRES_DB: mvp_agent
+      POSTGRES_USER: mvp_agent
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mvp_agent -d mvp_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
   ollama:
     image: ollama/ollama:latest
     container_name: mvp-ollama
@@ -29,14 +48,49 @@ services:
       context: .
       dockerfile: agno_service/Dockerfile
     container_name: mvp-agno-service
+    secrets:
+      - source: vertex_sa
+        target: vertex_sa.json
+      - source: openrouter_api_key
+        target: openrouter_api_key
+      - source: jumpcloud_api_key
+        target: jumpcloud_api_key
+      - source: jumpcloud_client_id
+        target: jumpcloud_client_id
+      - source: jumpcloud_client_secret
+        target: jumpcloud_client_secret
+      - source: jumpcloud_base_url
+        target: jumpcloud_base_url
+      - source: falcon_client_id
+        target: falcon_client_id
+      - source: falcon_client_secret
+        target: falcon_client_secret
+      - source: falcon_base_url
+        target: falcon_base_url
     environment:
       AGNO_MODEL_PROVIDER: ${AGNO_MODEL_PROVIDER:-ollama}
       AGNO_OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       AGNO_OLLAMA_HOST: http://ollama:11434
       AGNO_OPENAI_MODEL: ${AGNO_OPENAI_MODEL:-gpt-4o-mini}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/vertex_sa.json
+      OPENROUTER_API_KEY_FILE: /run/secrets/openrouter_api_key
+      JUMPCLOUD_TOOL_ENABLED: ${JUMPCLOUD_TOOL_ENABLED:-true}
+      JUMPCLOUD_API_KEY_FILE: /run/secrets/jumpcloud_api_key
+      JUMPCLOUD_CLIENT_ID_FILE: /run/secrets/jumpcloud_client_id
+      JUMPCLOUD_CLIENT_SECRET_FILE: /run/secrets/jumpcloud_client_secret
+      JUMPCLOUD_BASE_URL_FILE: /run/secrets/jumpcloud_base_url
+      JUMPCLOUD_TIMEOUT_SECONDS: ${JUMPCLOUD_TIMEOUT_SECONDS:-30}
+      JUMPCLOUD_WRITE_ENABLED: ${JUMPCLOUD_WRITE_ENABLED:-false}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENAI_ORG: ${OPENAI_ORG:-}
+      FALCON_MCP_ENABLED: ${FALCON_MCP_ENABLED:-true}
+      FALCON_MCP_TRANSPORT_MODE: ${FALCON_MCP_TRANSPORT_MODE:-streamable-http}
+      FALCON_MCP_URL: ${FALCON_MCP_URL:-http://falcon_mcp:8000/mcp}
+      FALCON_MCP_TIMEOUT_SECONDS: ${FALCON_MCP_TIMEOUT_SECONDS:-90}
+      FALCON_MCP_INCLUDE_ALL_TOOLS: ${FALCON_MCP_INCLUDE_ALL_TOOLS:-false}
+      FALCON_CLIENT_ID_FILE: /run/secrets/falcon_client_id
+      FALCON_CLIENT_SECRET_FILE: /run/secrets/falcon_client_secret
+      FALCON_BASE_URL_FILE: /run/secrets/falcon_base_url
     ports:
       - "8010:8010"
     depends_on:
@@ -44,6 +98,8 @@ services:
         condition: service_healthy
       ollama-init:
         condition: service_completed_successfully
+      falcon_mcp:
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health')\""]
@@ -51,18 +107,56 @@ services:
       timeout: 5s
       retries: 20
 
+  falcon_mcp:
+    build:
+      context: .
+      dockerfile: falcon_mcp/Dockerfile
+    container_name: mvp-falcon-mcp
+    secrets:
+      - source: falcon_client_id
+        target: falcon_client_id
+      - source: falcon_client_secret
+        target: falcon_client_secret
+      - source: falcon_base_url
+        target: falcon_base_url
+    environment:
+      FALCON_CLIENT_ID_FILE: /run/secrets/falcon_client_id
+      FALCON_CLIENT_SECRET_FILE: /run/secrets/falcon_client_secret
+      FALCON_BASE_URL_FILE: /run/secrets/falcon_base_url
+      FALCON_MCP_TRANSPORT: streamable-http
+      FALCON_MCP_HOST: 0.0.0.0
+      FALCON_MCP_PORT: 8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.create_connection(('127.0.0.1', 8000), 5); s.close()\""]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
   server:
     build:
       context: .
       dockerfile: server/Dockerfile
     container_name: mvp-server
+    secrets:
+      - source: session_secret
+        target: session_secret
+      - source: config_hmac_secret
+        target: config_hmac_secret
+      - source: postgres_password
+        target: postgres_password
     environment:
-      DATABASE_URL: file:/workspace/server/runtime/dev.db
       PORT: 8787
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
       APP_ORIGINS: ${APP_ORIGINS:-}
-      SESSION_SECRET: ${SESSION_SECRET:-change-this-session-secret}
-      CONFIG_HMAC_SECRET: ${CONFIG_HMAC_SECRET:-change-this-config-hmac-secret}
+      SESSION_SECRET_FILE: /run/secrets/session_secret
+      CONFIG_HMAC_SECRET_FILE: /run/secrets/config_hmac_secret
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: mvp_agent
+      POSTGRES_USER: mvp_agent
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      LEGACY_SQLITE_EXPORT_PATH: /workspace/server/runtime/sqlite-export.json
       STORE_SIMULATION_CONTENT: ${STORE_SIMULATION_CONTENT:-false}
       AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-30}
       AGNO_BASE_URL: http://agno_service:8010
@@ -73,6 +167,8 @@ services:
     depends_on:
       agno_service:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     volumes:
       - server_runtime:/workspace/server/runtime
     restart: unless-stopped
@@ -81,6 +177,46 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+
+  server-bootstrap:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: mvp-server-bootstrap
+    profiles: ["bootstrap"]
+    secrets:
+      - source: session_secret
+        target: session_secret
+      - source: config_hmac_secret
+        target: config_hmac_secret
+      - source: postgres_password
+        target: postgres_password
+    environment:
+      PORT: 8787
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
+      APP_ORIGINS: ${APP_ORIGINS:-}
+      SESSION_SECRET_FILE: /run/secrets/session_secret
+      CONFIG_HMAC_SECRET_FILE: /run/secrets/config_hmac_secret
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: mvp_agent
+      POSTGRES_USER: mvp_agent
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      LEGACY_SQLITE_EXPORT_PATH: /workspace/server/runtime/sqlite-export.json
+      STORE_SIMULATION_CONTENT: ${STORE_SIMULATION_CONTENT:-false}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-30}
+      AGNO_BASE_URL: http://agno_service:8010
+      AGNO_ENABLED: ${AGNO_ENABLED:-true}
+      AGNO_TIMEOUT_MS: ${AGNO_TIMEOUT_MS:-90000}
+    depends_on:
+      agno_service:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - server_runtime:/workspace/server/runtime
+    restart: "no"
+    command: ["./docker-entrypoint.sh", "bootstrap"]
 
   client:
     build:
@@ -98,5 +234,32 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres_data:
   ollama_data:
   server_runtime:
+
+secrets:
+  vertex_sa:
+    file: ./secrets/vertex_sa.json
+  openrouter_api_key:
+    file: ./secrets/openrouter_api_key
+  jumpcloud_api_key:
+    file: ./secrets/jumpcloud_api_key
+  jumpcloud_client_id:
+    file: ./secrets/jumpcloud_client_id
+  jumpcloud_client_secret:
+    file: ./secrets/jumpcloud_client_secret
+  jumpcloud_base_url:
+    file: ./secrets/jumpcloud_base_url
+  falcon_client_id:
+    file: ./secrets/falcon_client_id
+  falcon_client_secret:
+    file: ./secrets/falcon_client_secret
+  falcon_base_url:
+    file: ./secrets/falcon_base_url
+  session_secret:
+    file: ./secrets/session_secret
+  config_hmac_secret:
+    file: ./secrets/config_hmac_secret
+  postgres_password:
+    file: ./secrets/postgres_password

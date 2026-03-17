@@ -1,31 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { apiGet } from "../lib/api";
+import { apiDelete, apiGet, apiPost, apiPut } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import type { AgentWithLinks, Team } from "../lib/types";
-
-type SkillRecord = {
-  id: string;
-  name: string;
-  description: string;
-  prompt: string;
-  runbookUrl: string;
-  category: "operations" | "analysis" | "compliance" | "custom";
-  linkedAgentIds: string[];
-  enabled: boolean;
-  ownerTeamId: string | null;
-  visibility: "private" | "shared";
-};
+import type { AgentWithLinks, Skill, Team } from "../lib/types";
 
 type SkillTab = "overview" | "details" | "linkedAgents";
-
-type SkillForm = Omit<SkillRecord, "id">;
-
-const STORAGE_KEY = "studio.skills.config.v2";
+type SkillForm = Omit<Skill, "id" | "managedBy" | "runtimeSource"> & { linkedAgentIds: string[] };
 
 const tabs: Array<{ id: SkillTab; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "details", label: "Details" },
-  { id: "linkedAgents", label: "Linked Agents" },
+  { id: "overview", label: "Biblioteca" },
+  { id: "details", label: "Detalhes" },
+  { id: "linkedAgents", label: "Uso" },
 ];
 
 const empty: SkillForm = {
@@ -34,146 +18,23 @@ const empty: SkillForm = {
   prompt: "",
   runbookUrl: "",
   category: "operations",
-  linkedAgentIds: [],
   enabled: true,
-  ownerTeamId: null,
   visibility: "private",
+  ownerTeamId: null,
+  linkedAgentIds: [],
 };
 
-function defaultSecuritySkills(): SkillRecord[] {
-  return [
-    {
-      id: "skill-sec-triage",
-      name: "Incident Triage",
-      description: "Classify alert severity, impacted assets, and first-response path.",
-      prompt:
-        "You are the incident triage specialist. Normalize incoming alerts, identify impacted assets/users, estimate business impact, classify severity (low/med/high/critical), and produce a first-response checklist. Ask for missing evidence before escalation.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-      ownerTeamId: null,
-      visibility: "shared",
-    },
-    {
-      id: "skill-sec-threat-intel",
-      name: "Threat Intelligence Correlation",
-      description: "Correlate IoCs, campaigns, and actor TTPs across feeds.",
-      prompt:
-        "You are the threat intelligence correlator. Correlate domains, IPs, hashes, and URLs with known campaigns and ATT&CK techniques. Distinguish confirmed evidence from hypothesis, cite confidence level, and output actionable detections and blocking recommendations.",
-      runbookUrl: "",
-      category: "analysis",
-      linkedAgentIds: [],
-      enabled: true,
-      ownerTeamId: null,
-      visibility: "shared",
-    },
-    {
-      id: "skill-sec-vuln-prioritization",
-      name: "Vulnerability Prioritization",
-      description: "Prioritize vulnerabilities by exploitability, exposure, and business impact.",
-      prompt:
-        "You are the vulnerability prioritization specialist. Rank findings by exploitability, internet exposure, privilege impact, asset criticality, and compensating controls. Propose remediation order with deadlines and clear owner recommendations.",
-      runbookUrl: "",
-      category: "analysis",
-      linkedAgentIds: [],
-      enabled: true,
-      ownerTeamId: null,
-      visibility: "shared",
-    },
-    {
-      id: "skill-sec-phishing-response",
-      name: "Phishing Investigation",
-      description: "Analyze phishing reports, extract indicators, and propose containment.",
-      prompt:
-        "You are the phishing analyst. Parse headers and body signals, extract IoCs, identify spoofing patterns, and determine user impact. Provide containment actions (block/sinkhole/quarantine), user communication guidance, and escalation criteria.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-      ownerTeamId: null,
-      visibility: "shared",
-    },
-    {
-      id: "skill-sec-ir-timeline",
-      name: "Incident Timeline Builder",
-      description: "Build forensic timeline with key events, artifacts, and decisions.",
-      prompt:
-        "You are the incident timeline builder. Reconstruct event chronology from logs and alerts with UTC timestamps, source reliability, and causality links. Highlight gaps in evidence and list next collection steps required for closure.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-      ownerTeamId: null,
-      visibility: "shared",
-    },
-    {
-      id: "skill-sec-control-mapping",
-      name: "Control Mapping (ISO/NIST)",
-      description: "Map findings and gaps to security controls and compliance obligations.",
-      prompt:
-        "You are the control mapping specialist. Map security findings to ISO 27001 and NIST CSF control families, identify compliance impact, and recommend corrective actions with measurable acceptance criteria for audit readiness.",
-      runbookUrl: "",
-      category: "compliance",
-      linkedAgentIds: [],
-      enabled: true,
-      ownerTeamId: null,
-      visibility: "shared",
-    },
-    {
-      id: "skill-sec-post-incident",
-      name: "Post-Incident Review",
-      description: "Generate lessons learned, corrective actions, and prevention backlog.",
-      prompt:
-        "You are the post-incident reviewer. Produce a blameless retrospective with root cause, contributing factors, response quality analysis, and a prioritized prevention backlog. Include owners, target dates, and verification metrics.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-      ownerTeamId: null,
-      visibility: "shared",
-    },
-  ];
-}
-
-function loadSkills(): SkillRecord[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultSecuritySkills();
-    const parsed = JSON.parse(raw) as Array<Partial<SkillRecord>>;
-    if (!Array.isArray(parsed) || !parsed.length) return defaultSecuritySkills();
-    return parsed.map((item, index) => ({
-      id: item.id || `skill-${Date.now()}-${index}`,
-      name: item.name || "Unnamed Skill",
-      description: item.description || "",
-      prompt: item.prompt || "",
-      runbookUrl: item.runbookUrl || "",
-      category: item.category || "custom",
-      linkedAgentIds: Array.isArray(item.linkedAgentIds) ? item.linkedAgentIds : [],
-      enabled: item.enabled !== false,
-      ownerTeamId: item.ownerTeamId || null,
-      visibility: item.visibility === "shared" ? "shared" : "private",
-    }));
-  } catch {
-    return defaultSecuritySkills();
-  }
-}
-
-function saveSkills(skills: SkillRecord[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(skills));
-}
-
-function toForm(skill: SkillRecord): SkillForm {
+function toForm(skill: Skill): SkillForm {
   return {
     name: skill.name,
     description: skill.description,
     prompt: skill.prompt,
-    runbookUrl: skill.runbookUrl,
+    runbookUrl: skill.runbookUrl || "",
     category: skill.category,
-    linkedAgentIds: skill.linkedAgentIds,
     enabled: skill.enabled,
-    ownerTeamId: skill.ownerTeamId,
     visibility: skill.visibility,
+    ownerTeamId: skill.ownerTeamId,
+    linkedAgentIds: skill.linkedAgentIds || [],
   };
 }
 
@@ -183,23 +44,27 @@ export function SkillsPage() { // NOSONAR
   const [status, setStatus] = useState("");
   const [agents, setAgents] = useState<AgentWithLinks[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
-  const [skills, setSkills] = useState<SkillRecord[]>(() => loadSkills());
-  const [selectedId, setSelectedId] = useState(() => loadSkills()[0]?.id || "");
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [selectedId, setSelectedId] = useState("");
   const [form, setForm] = useState<SkillForm>(empty);
 
-  useEffect(() => {
-    void Promise.all([
+  const load = async () => {
+    const [agentRes, teamRes, skillRes] = await Promise.all([
       apiGet<{ agents: AgentWithLinks[] }>("/api/agents"),
       apiGet<{ teams: Team[] }>("/api/teams"),
-    ])
-      .then(([agentRes, teamRes]) => {
-        setAgents(agentRes.agents);
-        setTeams(teamRes.teams);
-      })
-      .catch(() => {
-        setAgents([]);
-        setTeams([]);
-      });
+      apiGet<{ skills: Skill[] }>("/api/skills"),
+    ]);
+    setAgents(agentRes.agents);
+    setTeams(teamRes.teams);
+    setSkills(skillRes.skills);
+  };
+
+  useEffect(() => {
+    void load().catch(() => {
+      setAgents([]);
+      setTeams([]);
+      setSkills([]);
+    });
   }, []);
 
   const visibleSkills = useMemo(() => {
@@ -209,9 +74,8 @@ export function SkillsPage() { // NOSONAR
   }, [skills, user]);
 
   useEffect(() => {
-    saveSkills(skills);
     setSelectedId((current) => (visibleSkills.some((skill) => skill.id === current) ? current : (visibleSkills[0]?.id || "")));
-  }, [skills, visibleSkills]);
+  }, [visibleSkills]);
 
   const selected = useMemo(() => visibleSkills.find((skill) => skill.id === selectedId) || null, [visibleSkills, selectedId]);
 
@@ -223,9 +87,7 @@ export function SkillsPage() { // NOSONAR
     setForm(toForm(selected));
   }, [selected?.id]);
 
-  const linkedAgentList = useMemo(() => {
-    return agents.filter((agent) => form.linkedAgentIds.includes(agent.id));
-  }, [agents, form.linkedAgentIds]);
+  const linkedAgentList = useMemo(() => agents.filter((agent) => form.linkedAgentIds.includes(agent.id)), [agents, form.linkedAgentIds]);
 
   const startCreate = () => {
     setSelectedId("");
@@ -233,18 +95,19 @@ export function SkillsPage() { // NOSONAR
     setTab("details");
   };
 
-  const save = () => {
-    const payload: SkillRecord = {
-      id: selected?.id || `skill-${Date.now()}`,
+  const save = async () => {
+    const payload = {
       name: form.name.trim(),
       description: form.description.trim(),
       prompt: form.prompt.trim(),
-      runbookUrl: form.runbookUrl.trim(),
+      runbookUrl: form.runbookUrl?.trim() || "",
       category: form.category,
-      linkedAgentIds: form.linkedAgentIds,
       enabled: form.enabled,
-      ownerTeamId: form.ownerTeamId,
       visibility: form.visibility,
+      ownerTeamId: form.ownerTeamId,
+      linkedAgentIds: form.linkedAgentIds,
+      managedBy: selected?.managedBy || "portal",
+      runtimeSource: selected?.runtimeSource || null,
     };
 
     if (!payload.name) {
@@ -252,29 +115,50 @@ export function SkillsPage() { // NOSONAR
       return;
     }
 
-    if (selected) {
-      setSkills((prev) => prev.map((item) => (item.id === selected.id ? payload : item)));
-      setStatus("Skill updated.");
-    } else {
-      setSkills((prev) => [payload, ...prev]);
-      setSelectedId(payload.id);
-      setStatus("Skill created.");
+    try {
+      if (selected) {
+        await apiPut(`/api/skills/${selected.id}`, payload);
+        setStatus("Skill updated.");
+      } else {
+        await apiPost("/api/skills", payload);
+        setStatus("Skill created.");
+      }
+      await load();
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Failed to save skill.");
     }
   };
 
-  const removeSelected = () => {
+  const removeSelected = async () => {
     if (!selected) return;
     if (!window.confirm(`Delete skill "${selected.name}"?`)) return;
-    setSkills((prev) => prev.filter((item) => item.id !== selected.id));
-    setStatus("Skill removed.");
+    try {
+      await apiDelete(`/api/skills/${selected.id}`);
+      setStatus("Skill removed.");
+      await load();
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Failed to delete skill.");
+    }
+  };
+
+  const saveCustomization = async () => {
+    if (!selected) return;
+    try {
+      await apiPut(`/api/skills/${selected.id}/customization`, {
+        userCustomized: Boolean(form.userCustomized),
+        customizationNote: form.customizationNote?.trim() || null,
+      });
+      setStatus(form.userCustomized ? "Protecao de customizacao salva." : "Protecao de customizacao removida.");
+      await load();
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Failed to save customization protection.");
+    }
   };
 
   const setLinkedAgentChecked = (agentId: string, checked: boolean) => {
     setForm((prev) => ({
       ...prev,
-      linkedAgentIds: checked
-        ? [...prev.linkedAgentIds, agentId]
-        : prev.linkedAgentIds.filter((id) => id !== agentId),
+      linkedAgentIds: checked ? [...prev.linkedAgentIds, agentId] : prev.linkedAgentIds.filter((id) => id !== agentId),
     }));
   };
 
@@ -283,10 +167,10 @@ export function SkillsPage() { // NOSONAR
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-slate-100">Skills</h2>
-          <p className="text-sm text-slate-400">Capability layer: reusable operational behaviors linked to agents.</p>
+          <p className="text-sm text-slate-400">Biblioteca de capacidades reutilizaveis. Skills do runtime aparecem aqui como leitura; skills simples podem ser criadas pelo portal.</p>
         </div>
         <div className="flex gap-2">
-          <button className="btn-ghost" onClick={() => setSkills(loadSkills())}>Reload</button>
+          <button className="btn-ghost" onClick={() => void load()}>Reload</button>
           <button className="btn-primary" onClick={startCreate}>New Skill</button>
         </div>
       </div>
@@ -304,10 +188,11 @@ export function SkillsPage() { // NOSONAR
                 onClick={() => setSelectedId(skill.id)}
               >
                 <div className="font-semibold text-slate-100">{skill.name}</div>
-                <div className="text-xs text-slate-400">{skill.category} | {skill.enabled ? "enabled" : "disabled"}</div>
+                <div className="text-xs text-slate-400">{skill.category} | {skill.enabled ? "enabled" : "disabled"} | {skill.managedBy}</div>
+                {skill.userCustomized ? <div className="mt-2 text-[10px] uppercase tracking-wider text-amber-300">custom protegido</div> : null}
               </button>
             ))}
-            {!skills.length ? <div className="text-xs text-slate-400">No skills created yet.</div> : null}
+            {!visibleSkills.length ? <div className="text-xs text-slate-400">No skills created yet.</div> : null}
           </div>
         </div>
 
@@ -321,50 +206,66 @@ export function SkillsPage() { // NOSONAR
           <div className="panel p-4">
             <div className="mb-2 flex items-center justify-between">
               <div className="text-sm font-semibold text-slate-100">Skill Settings</div>
-              {selected ? <button className="rounded-md border border-rose-500/50 bg-rose-500/15 px-3 py-2 text-sm text-rose-200" onClick={removeSelected}>Delete</button> : null}
+              {selected && selected.managedBy !== "agno" ? <button className="rounded-md border border-rose-500/50 bg-rose-500/15 px-3 py-2 text-sm text-rose-200" onClick={() => void removeSelected()}>Delete</button> : null}
             </div>
 
             {tab === "overview" ? (
               <div className="space-y-3">
-                <div className="text-sm text-slate-400">Summary and current assignment footprint.</div>
+                <div className="text-sm text-slate-400">Resumo funcional e abrangencia atual da skill.</div>
                 {selected ? (
                   <div className="grid gap-3 md:grid-cols-3">
                     <div><div className="text-xs text-slate-400">Name</div><div className="text-sm text-slate-100">{selected.name}</div></div>
                     <div><div className="text-xs text-slate-400">Category</div><div className="text-sm text-slate-100">{selected.category}</div></div>
                     <div><div className="text-xs text-slate-400">Status</div><div className="text-sm text-slate-100">{selected.enabled ? "enabled" : "disabled"}</div></div>
                     <div><div className="text-xs text-slate-400">Visibility</div><div className="text-sm text-slate-100">{selected.visibility}</div></div>
-                    <div><div className="text-xs text-slate-400">Linked Agents</div><div className="text-sm text-slate-100">{selected.linkedAgentIds.length}</div></div>
+                    <div><div className="text-xs text-slate-400">Linked Agents</div><div className="text-sm text-slate-100">{(selected.linkedAgentIds || []).length}</div></div>
+                    <div><div className="text-xs text-slate-400">Managed By</div><div className="text-sm text-slate-100">{selected.managedBy}</div></div>
+                    <div><div className="text-xs text-slate-400">Protegida</div><div className="text-sm text-slate-100">{selected.userCustomized ? "sim" : "nao"}</div></div>
                     <div className="md:col-span-2"><div className="text-xs text-slate-400">Runbook</div><div className="truncate text-sm text-slate-100">{selected.runbookUrl || "-"}</div></div>
                     <div className="md:col-span-3"><div className="text-xs text-slate-400">Prompt</div><div className="text-sm text-slate-100">{selected.prompt || "-"}</div></div>
+                    <div className="md:col-span-3 rounded-md border border-amber-400/30 bg-amber-500/10 p-3">
+                      <div className="text-sm font-semibold text-amber-100">Protecao contra catalog sync</div>
+                      <div className="mt-1 text-xs text-amber-50/80">Quando habilitado, `catalog sync` preserva esta skill e nao sobrescreve seu prompt e metadados.</div>
+                      <label className="mt-3 flex items-center gap-2 text-xs text-slate-200">
+                        <input type="checkbox" checked={Boolean(form.userCustomized)} onChange={(e) => setForm((s) => ({ ...s, userCustomized: e.target.checked }))} />
+                        Marcar como customizacao do usuario
+                      </label>
+                      <textarea className="input-dark mt-3 min-h-20" placeholder="Motivo opcional para preservar esta skill" value={form.customizationNote || ""} onChange={(e) => setForm((s) => ({ ...s, customizationNote: e.target.value }))} />
+                      <div className="mt-3">
+                        <button className="btn-ghost" onClick={() => void saveCustomization()}>Salvar protecao</button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
-                  <div className="text-sm text-slate-400">Create a skill in Details tab.</div>
+                  <div className="text-sm text-slate-400">Crie uma skill na aba Detalhes.</div>
                 )}
               </div>
             ) : null}
 
             {tab === "details" ? (
               <div className="grid gap-2 md:grid-cols-2">
-                <input className="input-dark" placeholder="Skill name" value={form.name} onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))} />
-                <select className="input-dark" value={form.category} onChange={(e) => setForm((s) => ({ ...s, category: e.target.value as SkillForm["category"] }))}>
+                <input className="input-dark" placeholder="Skill name" value={form.name} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))} />
+                <select className="input-dark" value={form.category} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, category: e.target.value as SkillForm["category"] }))}>
                   <option value="operations">operations</option>
                   <option value="analysis">analysis</option>
                   <option value="compliance">compliance</option>
                   <option value="custom">custom</option>
                 </select>
-                <select className="input-dark" value={form.ownerTeamId || ""} onChange={(e) => setForm((s) => ({ ...s, ownerTeamId: e.target.value || null }))}>
+                <select className="input-dark" value={form.ownerTeamId || ""} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, ownerTeamId: e.target.value || null }))}>
                   <option value="">No owner team</option>
                   {teams.map((team) => <option key={team.id} value={team.id}>{team.key}</option>)}
                 </select>
-                <select className="input-dark" value={form.visibility} onChange={(e) => setForm((s) => ({ ...s, visibility: e.target.value as SkillForm["visibility"] }))}>
+                <select className="input-dark" value={form.visibility} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, visibility: e.target.value as SkillForm["visibility"] }))}>
                   <option value="private">private</option>
                   <option value="shared">shared</option>
                 </select>
-                <input className="input-dark md:col-span-2" placeholder="Runbook URL (optional)" value={form.runbookUrl} onChange={(e) => setForm((s) => ({ ...s, runbookUrl: e.target.value }))} />
-                <textarea className="input-dark md:col-span-2 min-h-24" placeholder="Description" value={form.description} onChange={(e) => setForm((s) => ({ ...s, description: e.target.value }))} />
-                <textarea className="input-dark md:col-span-2 min-h-32" placeholder="Prompt / operational instruction" value={form.prompt} onChange={(e) => setForm((s) => ({ ...s, prompt: e.target.value }))} />
-                <label className="flex items-center gap-2 text-xs text-slate-300 md:col-span-2"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm((s) => ({ ...s, enabled: e.target.checked }))} />Enabled</label>
-                <div className="md:col-span-2"><button className="btn-primary" onClick={save}>{selected ? "Save" : "Create"}</button></div>
+                <input className="input-dark md:col-span-2" placeholder="Runbook URL (optional)" value={form.runbookUrl || ""} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, runbookUrl: e.target.value }))} />
+                <textarea className="input-dark md:col-span-2 min-h-24" placeholder="Description" value={form.description} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, description: e.target.value }))} />
+                <textarea className="input-dark md:col-span-2 min-h-32" placeholder="Prompt / operational instruction" value={form.prompt} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, prompt: e.target.value }))} />
+                <label className="flex items-center gap-2 text-xs text-slate-300 md:col-span-2"><input type="checkbox" checked={form.enabled} disabled={selected?.managedBy === "agno"} onChange={(e) => setForm((s) => ({ ...s, enabled: e.target.checked }))} />Enabled</label>
+                <div className="md:col-span-2">
+                  {selected?.managedBy === "agno" ? <div className="text-xs text-slate-400">Runtime skill gerenciada pelo Agno. Edite no runtime/catalog.</div> : <button className="btn-primary" onClick={() => void save()}>{selected ? "Save" : "Create"}</button>}
+                </div>
               </div>
             ) : null}
 
@@ -378,6 +279,7 @@ export function SkillsPage() { // NOSONAR
                         <input
                           type="checkbox"
                           checked={form.linkedAgentIds.includes(agent.id)}
+                          disabled={selected?.managedBy === "agno"}
                           onChange={(e) => setLinkedAgentChecked(agent.id, e.target.checked)}
                         />
                         {agent.name}
@@ -397,7 +299,7 @@ export function SkillsPage() { // NOSONAR
                     <div className="text-sm text-slate-400">No linked agents.</div>
                   )}
                 </div>
-                <button className="btn-primary" onClick={save}>{selected ? "Save Links" : "Create Skill"}</button>
+                {selected?.managedBy === "agno" ? <div className="text-xs text-slate-400">Runtime skill gerenciada pelo Agno. Vinculos devem ser sincronizados pelo catalogo runtime.</div> : <button className="btn-primary" onClick={() => void save()}>{selected ? "Save Links" : "Create Skill"}</button>}
               </div>
             ) : null}
           </div>

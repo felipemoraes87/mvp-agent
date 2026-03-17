@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -57,6 +57,7 @@ model Team {
   description      String?
   agents           Agent[]
   tools            Tool[]
+  skills           Skill[]
   knowledgeSources KnowledgeSource[]
   maintainers      User[]
   routingRules     RoutingRule[]
@@ -122,13 +123,18 @@ model Agent {
   knowledgeAddReferences Boolean       @default(true)
   knowledgeContextFormat String?
   knowledgeFilters  Json?
+  runtimeConfig     Json?
   tags              Json
   type              AgentType
   isGlobal          Boolean            @default(false)
   visibility        String             @default("private")
+  userCustomized    Boolean            @default(false)
+  customizationNote String?
+  customizationUpdatedAt DateTime?
   teamId            String?
   team              Team?              @relation(fields: [teamId], references: [id])
   toolLinks         AgentTool[]
+  skillLinks        AgentSkill[]
   knowledgeLinks    AgentKnowledge[]
   outgoingHandoffs  Handoff[]          @relation("FromAgent")
   incomingHandoffs  Handoff[]          @relation("ToAgent")
@@ -160,11 +166,39 @@ model Tool {
   outputSchema          Json
   rateLimitPerMinute    Int                @default(60)
   visibility            String             @default("private")
+  managedBy             String             @default("portal")
+  runtimeSource         String?
+  userCustomized        Boolean            @default(false)
+  customizationNote     String?
+  customizationUpdatedAt DateTime?
   teamId                String?
   team                  Team?              @relation(fields: [teamId], references: [id])
   agentLinks            AgentTool[]
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
+}
+
+model Skill {
+  id            String       @id @default(cuid())
+  name          String
+  description   String
+  prompt        String
+  runbookUrl    String?
+  category      String
+  enabled       Boolean      @default(true)
+  visibility    String       @default("private")
+  managedBy     String       @default("portal")
+  runtimeSource String?
+  userCustomized Boolean     @default(false)
+  customizationNote String?
+  customizationUpdatedAt DateTime?
+  ownerTeamId   String?
+  ownerTeam     Team?        @relation(fields: [ownerTeamId], references: [id])
+  agentLinks    AgentSkill[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([name, ownerTeamId])
 }
 
 model AgentTool {
@@ -177,6 +211,16 @@ model AgentTool {
   tool     Tool    @relation(fields: [toolId], references: [id])
 
   @@unique([agentId, toolId])
+}
+
+model AgentSkill {
+  id      String @id @default(cuid())
+  agentId String
+  skillId String
+  agent   Agent  @relation(fields: [agentId], references: [id])
+  skill   Skill  @relation(fields: [skillId], references: [id])
+
+  @@unique([agentId, skillId])
 }
 
 model KnowledgeSource {
@@ -207,6 +251,9 @@ model KnowledgeSource {
   lastSyncError          String?
   indexedDocuments       Int      @default(0)
   visibility             String   @default("private")
+  userCustomized         Boolean  @default(false)
+  customizationNote      String?
+  customizationUpdatedAt DateTime?
   ownerTeamId            String
   ownerTeam              Team     @relation(fields: [ownerTeamId], references: [id])
   agentLinks             AgentKnowledge[]

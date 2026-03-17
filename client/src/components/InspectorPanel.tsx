@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiPost } from "../lib/api";
-import type { AgentWithLinks, KnowledgeSource, Team, Tool } from "../lib/types";
+import type { AgentWithLinks, KnowledgeSource, Skill, Team, Tool } from "../lib/types";
 import { ToolBadge } from "./ToolBadge";
 import { HelpTip } from "./HelpTip";
 
@@ -17,19 +17,6 @@ type SimResponse = {
   usedSources: Array<{ id: string; name: string; url: string }>;
 };
 
-type SkillRecord = {
-  id: string;
-  name: string;
-  description: string;
-  prompt: string;
-  runbookUrl: string;
-  category: "operations" | "analysis" | "compliance" | "custom";
-  linkedAgentIds: string[];
-  enabled: boolean;
-};
-
-const SKILLS_KEY = "studio.skills.config.v2";
-
 const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "config", label: "Configuracao" },
   { key: "run", label: "Run" },
@@ -39,117 +26,11 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: "permissions", label: "Permissions" },
 ];
 
-function defaultSecuritySkills(): SkillRecord[] {
-  return [
-    {
-      id: "skill-sec-triage",
-      name: "Incident Triage",
-      description: "Classify alert severity, impacted assets, and first-response path.",
-      prompt:
-        "You are the incident triage specialist. Normalize incoming alerts, identify impacted assets/users, estimate business impact, classify severity (low/med/high/critical), and produce a first-response checklist. Ask for missing evidence before escalation.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-    },
-    {
-      id: "skill-sec-threat-intel",
-      name: "Threat Intelligence Correlation",
-      description: "Correlate IoCs, campaigns, and actor TTPs across feeds.",
-      prompt:
-        "You are the threat intelligence correlator. Correlate domains, IPs, hashes, and URLs with known campaigns and ATT&CK techniques. Distinguish confirmed evidence from hypothesis, cite confidence level, and output actionable detections and blocking recommendations.",
-      runbookUrl: "",
-      category: "analysis",
-      linkedAgentIds: [],
-      enabled: true,
-    },
-    {
-      id: "skill-sec-vuln-prioritization",
-      name: "Vulnerability Prioritization",
-      description: "Prioritize vulnerabilities by exploitability, exposure, and business impact.",
-      prompt:
-        "You are the vulnerability prioritization specialist. Rank findings by exploitability, internet exposure, privilege impact, asset criticality, and compensating controls. Propose remediation order with deadlines and clear owner recommendations.",
-      runbookUrl: "",
-      category: "analysis",
-      linkedAgentIds: [],
-      enabled: true,
-    },
-    {
-      id: "skill-sec-phishing-response",
-      name: "Phishing Investigation",
-      description: "Analyze phishing reports, extract indicators, and propose containment.",
-      prompt:
-        "You are the phishing analyst. Parse headers and body signals, extract IoCs, identify spoofing patterns, and determine user impact. Provide containment actions (block/sinkhole/quarantine), user communication guidance, and escalation criteria.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-    },
-    {
-      id: "skill-sec-ir-timeline",
-      name: "Incident Timeline Builder",
-      description: "Build forensic timeline with key events, artifacts, and decisions.",
-      prompt:
-        "You are the incident timeline builder. Reconstruct event chronology from logs and alerts with UTC timestamps, source reliability, and causality links. Highlight gaps in evidence and list next collection steps required for closure.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-    },
-    {
-      id: "skill-sec-control-mapping",
-      name: "Control Mapping (ISO/NIST)",
-      description: "Map findings and gaps to security controls and compliance obligations.",
-      prompt:
-        "You are the control mapping specialist. Map security findings to ISO 27001 and NIST CSF control families, identify compliance impact, and recommend corrective actions with measurable acceptance criteria for audit readiness.",
-      runbookUrl: "",
-      category: "compliance",
-      linkedAgentIds: [],
-      enabled: true,
-    },
-    {
-      id: "skill-sec-post-incident",
-      name: "Post-Incident Review",
-      description: "Generate lessons learned, corrective actions, and prevention backlog.",
-      prompt:
-        "You are the post-incident reviewer. Produce a blameless retrospective with root cause, contributing factors, response quality analysis, and a prioritized prevention backlog. Include owners, target dates, and verification metrics.",
-      runbookUrl: "",
-      category: "operations",
-      linkedAgentIds: [],
-      enabled: true,
-    },
-  ];
-}
-
-function loadSkillRecords(): SkillRecord[] {
-  try {
-    const raw = localStorage.getItem(SKILLS_KEY);
-    if (!raw) return defaultSecuritySkills();
-    const parsed = JSON.parse(raw) as Array<Partial<SkillRecord>>;
-    if (!Array.isArray(parsed) || !parsed.length) return defaultSecuritySkills();
-    return parsed.map((item, index) => ({
-      id: item.id || `skill-${Date.now()}-${index}`,
-      name: item.name || "Unnamed Skill",
-      description: item.description || "",
-      prompt: item.prompt || "",
-      runbookUrl: item.runbookUrl || "",
-      category: item.category || "custom",
-      linkedAgentIds: Array.isArray(item.linkedAgentIds) ? item.linkedAgentIds : [],
-      enabled: item.enabled !== false,
-    }));
-  } catch {
-    return defaultSecuritySkills();
-  }
-}
-
-function saveSkillRecords(skills: SkillRecord[]) {
-  localStorage.setItem(SKILLS_KEY, JSON.stringify(skills));
-}
-
 export function InspectorPanel({ // NOSONAR
   agent,
   teams,
   tools,
+  skills,
   knowledge,
   mode = "sidebar",
   onClose,
@@ -158,10 +39,13 @@ export function InspectorPanel({ // NOSONAR
   onRemoveTool,
   onAssignKnowledge,
   onRemoveKnowledge,
+  onAssignSkill,
+  onRemoveSkill,
 }: {
   agent: AgentWithLinks | null;
   teams: Team[];
   tools: Tool[];
+  skills: Skill[];
   knowledge: KnowledgeSource[];
   mode?: "sidebar" | "modal";
   onClose: () => void;
@@ -170,6 +54,8 @@ export function InspectorPanel({ // NOSONAR
   onRemoveTool: (toolId: string) => Promise<void>;
   onAssignKnowledge: (knowledgeSourceId: string) => Promise<void>;
   onRemoveKnowledge: (knowledgeSourceId: string) => Promise<void>;
+  onAssignSkill: (skillId: string) => Promise<void>;
+  onRemoveSkill: (skillId: string) => Promise<void>;
 }) {
   const [tab, setTab] = useState<TabKey>("config");
   const [status, setStatus] = useState("");
@@ -183,7 +69,6 @@ export function InspectorPanel({ // NOSONAR
 
   const [selectedKnowledgeId, setSelectedKnowledgeId] = useState("");
 
-  const [skills, setSkills] = useState<SkillRecord[]>(() => loadSkillRecords());
   const [selectedSkillId, setSelectedSkillId] = useState("");
 
   const [newTool, setNewTool] = useState({
@@ -194,7 +79,7 @@ export function InspectorPanel({ // NOSONAR
     teamId: "",
   });
   const [newKnowledge, setNewKnowledge] = useState({ name: "", url: "", tagsCsv: "", ownerTeamId: "" });
-  const [newSkill, setNewSkill] = useState({ name: "", description: "", prompt: "", runbookUrl: "", category: "operations" as SkillRecord["category"] });
+  const [newSkill, setNewSkill] = useState({ name: "", description: "", prompt: "", runbookUrl: "", category: "operations" as Skill["category"] });
   const [runMessage, setRunMessage] = useState("");
   const [runContextTags, setRunContextTags] = useState("");
   const [runBusy, setRunBusy] = useState(false);
@@ -228,7 +113,6 @@ export function InspectorPanel({ // NOSONAR
     setRunResult(null);
     setRunError("");
 
-    setSkills(loadSkillRecords());
   }, [agent?.id, teams]);
 
   const linkedToolIds = useMemo(() => new Set((agent?.toolLinks || []).map((link) => link.toolId)), [agent?.toolLinks]);
@@ -243,12 +127,12 @@ export function InspectorPanel({ // NOSONAR
 
   const linkedSkills = useMemo(() => {
     if (!agent) return [];
-    return skills.filter((skill) => skill.linkedAgentIds.includes(agent.id));
+    return skills.filter((skill) => (skill.linkedAgentIds || []).includes(agent.id));
   }, [skills, agent?.id]);
 
   const assignableSkills = useMemo(() => {
     if (!agent) return [];
-    return skills.filter((skill) => !skill.linkedAgentIds.includes(agent.id));
+    return skills.filter((skill) => !(skill.linkedAgentIds || []).includes(agent.id));
   }, [skills, agent?.id]);
 
   const createToolAndAssign = async () => {
@@ -302,53 +186,56 @@ export function InspectorPanel({ // NOSONAR
     }
   };
 
-  const createSkillAndAssign = () => {
+  const createSkillAndAssign = async () => {
     if (!agent) return;
-    const payload: SkillRecord = {
-      id: `skill-${Date.now()}`,
+    const payload = {
       name: newSkill.name.trim(),
       description: newSkill.description.trim(),
       prompt: newSkill.prompt.trim(),
       runbookUrl: newSkill.runbookUrl.trim(),
       category: newSkill.category,
-      linkedAgentIds: [agent.id],
       enabled: true,
+      visibility: agent.teamId ? "private" : "shared",
+      ownerTeamId: agent.teamId,
+      linkedAgentIds: [agent.id],
+      managedBy: "portal",
+      runtimeSource: null,
     };
     if (!payload.name) {
       setStatus("Nome da skill obrigatorio.");
       return;
     }
-    const next = [payload, ...skills];
-    setSkills(next);
-    saveSkillRecords(next);
-    setStatus("Nova skill criada e vinculada.");
-    setModal(null);
-    setNewSkill({ name: "", description: "", prompt: "", runbookUrl: "", category: "operations" });
+    try {
+      await apiPost("/api/skills", payload);
+      setStatus("Nova skill criada e vinculada.");
+      setModal(null);
+      setNewSkill({ name: "", description: "", prompt: "", runbookUrl: "", category: "operations" });
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Falha ao criar skill.");
+    }
   };
 
-  const linkExistingSkill = () => {
+  const linkExistingSkill = async () => {
     if (!agent || !selectedSkillId) return;
-    const next = skills.map((skill) =>
-      skill.id === selectedSkillId && !skill.linkedAgentIds.includes(agent.id)
-        ? { ...skill, linkedAgentIds: [...skill.linkedAgentIds, agent.id] }
-        : skill,
-    );
-    setSkills(next);
-    saveSkillRecords(next);
-    setSelectedSkillId("");
-    setStatus("Skill vinculada ao agente.");
+    try {
+      await onAssignSkill(selectedSkillId);
+      setSelectedSkillId("");
+      setStatus("Skill vinculada ao agente.");
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Falha ao vincular skill.");
+    }
   };
 
-  const unlinkSkill = (skillId: string) => {
+  const unlinkSkill = async (skillId: string) => {
     if (!agent) return;
     const skillName = skills.find((skill) => skill.id === skillId)?.name || "this skill";
     if (!window.confirm(`Remove "${skillName}" from agent "${agent.name}"?`)) return;
-    const next = skills.map((skill) =>
-      skill.id === skillId ? { ...skill, linkedAgentIds: skill.linkedAgentIds.filter((id) => id !== agent.id) } : skill,
-    );
-    setSkills(next);
-    saveSkillRecords(next);
-    setStatus("Skill removida do agente.");
+    try {
+      await onRemoveSkill(skillId);
+      setStatus("Skill removida do agente.");
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Falha ao remover skill.");
+    }
   };
 
   const runFlowFromAgent = async () => {
@@ -588,7 +475,7 @@ export function InspectorPanel({ // NOSONAR
                       <div className="text-xs text-slate-400">{skill.category}</div>
                       <div className="line-clamp-2 text-[11px] text-slate-500">{skill.prompt || skill.description || "-"}</div>
                     </div>
-                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => unlinkSkill(skill.id)}>Remove</button>
+                    <button className="btn-ghost px-2 py-1 text-xs" onClick={() => void unlinkSkill(skill.id)}>Remove</button>
                   </div>
                 ))
               ) : (
@@ -604,7 +491,7 @@ export function InspectorPanel({ // NOSONAR
                   <option key={skill.id} value={skill.id}>{skill.name}</option>
                 ))}
               </select>
-              <button className="btn-primary w-full" disabled={!selectedSkillId} onClick={linkExistingSkill}>Link Skill</button>
+                <button className="btn-primary w-full" disabled={!selectedSkillId} onClick={() => void linkExistingSkill()}>Link Skill</button>
             </div>
           </>
         ) : null}
@@ -681,13 +568,13 @@ export function InspectorPanel({ // NOSONAR
                 <textarea className="input-dark min-h-20" placeholder="Descricao" value={newSkill.description} onChange={(e) => setNewSkill((prev) => ({ ...prev, description: e.target.value }))} />
                 <textarea className="input-dark min-h-24" placeholder="Prompt / operational instruction" value={newSkill.prompt} onChange={(e) => setNewSkill((prev) => ({ ...prev, prompt: e.target.value }))} />
                 <input className="input-dark" placeholder="Runbook URL" value={newSkill.runbookUrl} onChange={(e) => setNewSkill((prev) => ({ ...prev, runbookUrl: e.target.value }))} />
-                <select className="input-dark" value={newSkill.category} onChange={(e) => setNewSkill((prev) => ({ ...prev, category: e.target.value as SkillRecord["category"] }))}>
+                <select className="input-dark" value={newSkill.category} onChange={(e) => setNewSkill((prev) => ({ ...prev, category: e.target.value as Skill["category"] }))}>
                   <option value="operations">operations</option>
                   <option value="analysis">analysis</option>
                   <option value="compliance">compliance</option>
                   <option value="custom">custom</option>
                 </select>
-                <button className="btn-primary w-full" onClick={createSkillAndAssign}>Salvar e Vincular</button>
+                <button className="btn-primary w-full" onClick={() => void createSkillAndAssign()}>Salvar e Vincular</button>
               </div>
             ) : null}
           </div>

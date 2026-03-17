@@ -29,10 +29,14 @@ export type Agent = {
   knowledgeAddReferences?: boolean;
   knowledgeContextFormat?: "json" | "yaml" | null;
   knowledgeFilters?: unknown;
+  runtimeConfig?: unknown;
   tags: string[];
   type: "SUPERVISOR" | "SPECIALIST" | "TICKET";
   isGlobal: boolean;
   visibility: "private" | "shared";
+  userCustomized?: boolean;
+  customizationNote?: string | null;
+  customizationUpdatedAt?: string | null;
   teamId: string | null;
 };
 
@@ -45,6 +49,31 @@ export type AgentToolLink = {
   tool: Tool;
 };
 
+export type Skill = {
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+  runbookUrl?: string | null;
+  category: "operations" | "analysis" | "compliance" | "custom";
+  enabled: boolean;
+  visibility: "private" | "shared";
+  ownerTeamId: string | null;
+  managedBy: "portal" | "agno";
+  runtimeSource?: string | null;
+  userCustomized?: boolean;
+  customizationNote?: string | null;
+  customizationUpdatedAt?: string | null;
+  linkedAgentIds?: string[];
+};
+
+export type AgentSkillLink = {
+  id: string;
+  agentId: string;
+  skillId: string;
+  skill: Skill;
+};
+
 export type AgentKnowledgeLink = {
   id: string;
   agentId: string;
@@ -54,6 +83,7 @@ export type AgentKnowledgeLink = {
 
 export type AgentWithLinks = Agent & {
   toolLinks?: AgentToolLink[];
+  skillLinks?: AgentSkillLink[];
   knowledgeLinks?: AgentKnowledgeLink[];
 };
 
@@ -78,6 +108,11 @@ export type Tool = {
   rateLimitPerMinute: number;
   visibility: "private" | "shared";
   teamId: string | null;
+  managedBy?: "portal" | "agno";
+  runtimeSource?: string | null;
+  userCustomized?: boolean;
+  customizationNote?: string | null;
+  customizationUpdatedAt?: string | null;
 };
 
 export type KnowledgeSource = {
@@ -109,6 +144,9 @@ export type KnowledgeSource = {
   indexedDocuments?: number;
   visibility: "private" | "shared";
   ownerTeamId: string;
+  userCustomized?: boolean;
+  customizationNote?: string | null;
+  customizationUpdatedAt?: string | null;
 };
 
 export type Handoff = {
@@ -128,6 +166,17 @@ export type RoutingRule = {
   keywords: string[];
   tags: string[];
   minScore: number;
+};
+
+export type AgentChatMeta = {
+  usedAgno?: boolean;
+  degraded?: boolean;
+  agnoError?: string | null;
+  framework?: string;
+  provider?: string;
+  model?: string;
+  agent?: string;
+  correlationId?: string | null;
 };
 
 export type AccessUser = {
