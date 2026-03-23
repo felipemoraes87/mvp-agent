@@ -7,6 +7,7 @@ from .entitlement_reasoning import assess_entitlement
 from .integration_registry import IntegrationConfigRegistry
 from .knowledge_layer import search_knowledge
 from .memory import InvestigationMemoryStore
+from .role_mapping import triage_jira_access_request
 from .risk_analysis import assess_iam_risk
 from .schemas import (
     AgentCapability,
@@ -17,6 +18,7 @@ from .schemas import (
     FinalResponse,
     InvestigationPlan,
     KnowledgeQuery,
+    TicketTriageResult,
     UserIntent,
     WorkflowDecision,
 )
@@ -143,10 +145,13 @@ def maybe_build_unavailable_integration_prompt(
 
 def _classify_intent(message: str) -> UserIntent:
     lowered = message.lower()
-    requires_write = any(token in lowered for token in ["dispare", "execute", "aplique", "grave findings", "reconcile", "reconciliacao", "mude", "altere", "remova"])
+    requires_write = any(token in lowered for token in ["dispare", "execute", "aplique", "grave findings", "reconcile", "reconciliacao", "mude", "altere", "remova", "conceda", "libere"])
     category = "simple_query"
     rationale: list[str] = []
-    if any(token in lowered for token in ["de onde vem", "origem", "trace", "investigue", "investigar", "correlacione", "suspeit", "root cause", "adequado", "adequacao"]):
+    if any(token in lowered for token in ["jira", "chamado", "ticket", "fila"]) and any(token in lowered for token in ["acesso", "business role", "perfil", "role", "liberar", "conceder"]):
+        category = "access_request"
+        rationale.append("A solicitacao descreve intake ou tratamento de ticket Jira de acesso.")
+    elif any(token in lowered for token in ["de onde vem", "origem", "trace", "investigue", "investigar", "correlacione", "suspeit", "root cause", "adequado", "adequacao"]):
         category = "investigation"
         rationale.append("A solicitacao pede rastreio, correlacao ou investigacao.")
     elif any(token in lowered for token in ["compare", "comparar", "diferenca"]):
@@ -209,6 +214,15 @@ def _build_open_investigation(message: str) -> tuple[WorkflowDecision, list[str]
         ),
         list(dict.fromkeys(participants)),
     )
+
+
+def _is_jira_access_request_scenario(message: str, intent: UserIntent, decision: WorkflowDecision) -> bool:
+    lowered = message.lower()
+    if intent.category == "access_request":
+        return True
+    if decision.workflow_name == "Jira Access Request Intake Workflow":
+        return True
+    return any(token in lowered for token in ["jira", "ticket", "chamado", "fila"]) and any(token in lowered for token in ["acesso", "business role", "perfil", "role"])
 
 
 def _required_integrations(participants: list[str]) -> list[str]:
@@ -338,6 +352,14 @@ def handle_iam_team_request(
         limit=4,
     )
     knowledge_results = search_knowledge(query=knowledge_query, linked_knowledge=linked_knowledge)
+    ticket_triage: TicketTriageResult | None = None
+    if _is_jira_access_request_scenario(message, intent, decision):
+        ticket_triage = triage_jira_access_request(
+            message=message,
+            knowledge_results=knowledge_results,
+            linked_knowledge=linked_knowledge,
+        )
+
     entitlement_assessment = None
     if any(agent in participants for agent in ["Entitlement Reasoning Agent", "IAM Knowledge Agent"]) or any(token in message.lower() for token in ["adequado", "excesso", "origem", "orf", "sod", "excecao"]):
         entitlement_assessment = assess_entitlement(
@@ -390,11 +412,31 @@ def handle_iam_team_request(
                 details={"overall_severity": risk_assessment.overall_severity, "findings": [finding.title for finding in risk_assessment.findings]},
             )
         )
+    if ticket_triage is not None:
+        evidence.append(
+            EvidenceItem(
+                source_type="ticket_triage",
+                source_name="Jira Access Request Intake",
+                summary=ticket_triage.summary,
+                confidence=ticket_triage.confidence,
+                details={
+                    "classification": ticket_triage.classification,
+                    "business_role": ticket_triage.business_role,
+                    "jira_action": ticket_triage.jira_action,
+                    "iga_action": ticket_triage.iga_action,
+                    "issue_key": ticket_triage.extracted_context.issue_key,
+                },
+            )
+        )
 
     findings = [
         f"Intencao classificada como {intent.category}.",
         f"Modo de execucao: {decision.mode}.",
     ]
+    if ticket_triage is not None:
+        findings.append(f"Triagem do ticket: {ticket_triage.classification}.")
+        if ticket_triage.business_role:
+            findings.append(f"Business role sugerida: {ticket_triage.business_role}.")
     if entitlement_assessment is not None:
         findings.append(f"Classificacao de acesso: {entitlement_assessment.classification}.")
     if risk_assessment is not None:
@@ -408,11 +450,19 @@ def handle_iam_team_request(
     ]
     if entitlement_assessment is not None and entitlement_assessment.classification == "insufficient_evidence":
         gaps.append("As evidencias atuais ainda nao suportam uma classificacao forte de adequacao do acesso.")
+    if ticket_triage is not None and ticket_triage.classification != "fulfillable_access_request":
+        gaps.append("O ticket ainda nao esta suficientemente estruturado para automacao segura de acesso.")
 
     next_steps = [
         "Solicitar as configuracoes faltantes na ordem correta.",
         "Executar agentes somente depois que as integracoes requeridas estiverem prontas.",
     ]
+    if ticket_triage is not None:
+        next_steps = ticket_triage.recommended_steps[:]
+        if ticket_triage.classification == "fulfillable_access_request":
+            next_steps.insert(0, "Validar o pedido de acesso contra a tabela de business roles antes de acionar o IGA.")
+        else:
+            next_steps.insert(0, "Responder no Jira com a orientacao correta e bloquear automacao por enquanto.")
     if knowledge_results:
         next_steps.append("Usar as referencias documentais recuperadas para validar processo e excecoes.")
     if entitlement_assessment is not None:
@@ -437,6 +487,8 @@ def handle_iam_team_request(
             next_steps.append("Parar em proposta auditavel e solicitar aprovacao humana antes de qualquer execucao.")
         if unavailable:
             next_steps.insert(0, f"Seguir com as fontes disponiveis e registrar lacunas para: {', '.join(unavailable)}.")
+        if ticket_triage is not None and ticket_triage.classification == "fulfillable_access_request":
+            next_steps.insert(0, "Abrir ou preparar requisicao no IGA usando a business role mapeada.")
 
     diagnostic = DiagnosticResult(
         summary="Plano inicial do IAM Team preparado com knowledge, reasoning, risk e guardrails.",
@@ -456,6 +508,22 @@ def handle_iam_team_request(
                 *guarded_action_plan.decision.approval.blocking_checks[:2],
             ],
             manual_steps=guarded_action_plan.manual_steps[:4],
+        )
+    if ticket_triage is not None and ticket_triage.classification == "fulfillable_access_request":
+        change_proposal = ChangeProposal(
+            title="Solicitacao controlada de business role",
+            summary=f"Pedido apto para abertura no IGA com a business role {ticket_triage.business_role}.",
+            impact=guarded_action_plan.decision.risk_summary,
+            validations=[
+                "Confirmar usuario alvo e sistema no ticket Jira.",
+                "Confirmar match unico da tabela de business role.",
+                *guarded_action_plan.decision.approval.blocking_checks[:2],
+            ],
+            manual_steps=[
+                f"Comentar no Jira usando a orientacao operacional para {ticket_triage.business_role}.",
+                "Registrar o identificador da solicitacao devolvido pelo IGA no ticket.",
+                *guarded_action_plan.manual_steps[:2],
+            ],
         )
     summary = (
         f"{agent_name} classificou o pedido como {intent.category} e selecionou "
@@ -485,6 +553,7 @@ def handle_iam_team_request(
         entitlement_assessment=entitlement_assessment,
         risk_assessment=risk_assessment,
         guarded_action_plan=guarded_action_plan,
+        ticket_triage=ticket_triage,
         participating_agents=plan.participating_agents,
         plan_steps=plan.steps,
     )

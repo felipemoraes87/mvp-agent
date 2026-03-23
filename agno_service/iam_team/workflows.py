@@ -5,6 +5,43 @@ from typing import Any
 
 IAM_WORKFLOWS: list[dict[str, Any]] = [
     {
+        "name": "Jira Access Request Intake Workflow",
+        "objective": "Ler tickets Jira de IAM, decidir se sao solicitacoes de acesso validas, mapear business role e preparar acao segura no IGA.",
+        "preconditions": ["Ticket Jira ou texto equivalente com contexto de solicitacao de acesso."],
+        "integrations": ["jira", "confluence", "iga"],
+        "agents": [
+            "IAM Orchestrator",
+            "Jira/Confluence IAM Agent",
+            "IAM Knowledge Agent",
+            "Entitlement Reasoning Agent",
+            "IGA Agent",
+            "Change Guard / Approval Agent",
+        ],
+        "steps": [
+            "Ler o ticket Jira e extrair sistema, usuario alvo, tipo de pedido e justificativa.",
+            "Decidir se o ticket representa uma solicitacao de acesso valida ou apenas uma duvida operacional.",
+            "Resolver a business role a partir da tabela de mapeamento configurada.",
+            "Validar se o pedido parece coerente com baseline e processo.",
+            "Passar pelo Change Guard antes de qualquer escrita.",
+            "Enviar requisicao ao IGA somente quando houver match deterministico e dados suficientes.",
+            "Atualizar o Jira com orientacao, resultado ou necessidade de clarificacao.",
+        ],
+        "success_criteria": [
+            "Tickets validos sao separados de pedidos ambiguos.",
+            "Business role e proximo passo ficam explicitos no retorno.",
+        ],
+        "output_format": "classificacao do ticket, business role, acao no IGA, comentario sugerido para Jira, proximos passos",
+        "failure_handling": [
+            "Sem business role unica, comentar orientacao no Jira e nao chamar o IGA.",
+            "Se o IGA exigir aprovacao, retornar apenas proposta auditavel.",
+        ],
+        "setup_points": [
+            "Pedir Jira/Confluence para leitura do ticket e contexto.",
+            "Pedir IGA apenas se o ticket for elegivel para tratamento automatizado.",
+        ],
+        "match_keywords": ["jira", "chamado", "ticket", "fila", "business role", "solicitacao de acesso", "request de acesso"],
+    },
+    {
         "name": "Access Trace Workflow",
         "objective": "Descobrir de onde um acesso vem, da origem logica ate a evidencia operacional.",
         "preconditions": ["Identificador de usuario, grupo, role, projeto ou sistema-alvo."],

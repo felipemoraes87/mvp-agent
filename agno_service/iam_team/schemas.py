@@ -12,6 +12,7 @@ IntentCategory = Literal[
     "troubleshooting",
     "audit",
     "operational_action",
+    "access_request",
     "workflow_known",
     "ambiguous",
 ]
@@ -130,6 +131,7 @@ class FinalResponse(BaseModel):
     entitlement_assessment: "EntitlementAssessment | None" = None
     risk_assessment: "RiskAssessment | None" = None
     guarded_action_plan: "GuardedActionPlan | None" = None
+    ticket_triage: "TicketTriageResult | None" = None
     participating_agents: list[str] = Field(default_factory=list)
     plan_steps: list[ExecutionStep] = Field(default_factory=list)
 
@@ -222,3 +224,33 @@ class InvestigationMemoryEntry(BaseModel):
     findings: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
+
+
+TicketRequestClassification = Literal[
+    "fulfillable_access_request",
+    "unclear_request",
+    "not_access_request",
+]
+
+
+class AccessRequestContext(BaseModel):
+    issue_key: str | None = None
+    requester: str | None = None
+    target_user: str | None = None
+    system: str | None = None
+    request_type: str | None = None
+    requested_access: str | None = None
+    justification: str | None = None
+
+
+class TicketTriageResult(BaseModel):
+    classification: TicketRequestClassification
+    summary: str
+    confidence: Literal["low", "medium", "high"] = "medium"
+    business_role: str | None = None
+    guidance_comment: str | None = None
+    jira_action: str | None = None
+    iga_action: str | None = None
+    extracted_context: AccessRequestContext = Field(default_factory=AccessRequestContext)
+    rationale: list[str] = Field(default_factory=list)
+    recommended_steps: list[str] = Field(default_factory=list)

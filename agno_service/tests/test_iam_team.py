@@ -118,6 +118,35 @@ class IAMTeamTests(unittest.TestCase):
         )
         self.assertTrue(results)
 
+    @patch.dict("os.environ", {}, clear=True)
+    def test_jira_access_request_triage_returns_business_role(self) -> None:
+        response = handle_iam_team_request(
+            agent_name="IAM Orchestrator",
+            runtime_config={"iamTeamProfile": {"role": "coordinator"}},
+            message="Leia o ticket IAM-123 do Jira e conceda acesso para o usuario alice no GitHub com a justificativa onboarding do time de engenharia.",
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertEqual(response.workflow_name, "Jira Access Request Intake Workflow")
+        self.assertIsNotNone(response.ticket_triage)
+        assert response.ticket_triage is not None
+        self.assertEqual(response.ticket_triage.classification, "fulfillable_access_request")
+        self.assertEqual(response.ticket_triage.business_role, "BR_GITHUB_REPOSITORY_READER")
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_jira_access_request_triage_requests_guidance_when_missing_fields(self) -> None:
+        response = handle_iam_team_request(
+            agent_name="IAM Orchestrator",
+            runtime_config={"iamTeamProfile": {"role": "coordinator"}},
+            message="Leia a fila do Jira e responda o chamado IAM-456 sobre acesso porque o usuario esta com duvida.",
+        )
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIsNotNone(response.ticket_triage)
+        assert response.ticket_triage is not None
+        self.assertEqual(response.ticket_triage.classification, "unclear_request")
+        self.assertEqual(response.ticket_triage.jira_action, "comment_only")
+
 
 if __name__ == "__main__":
     unittest.main()

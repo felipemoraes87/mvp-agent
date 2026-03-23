@@ -20,8 +20,10 @@ from .schemas import (
     KnowledgeQuery,
     KnowledgeResult,
     MissingConfiguration,
+    AccessRequestContext,
     RiskAssessment,
     RiskFinding,
+    TicketTriageResult,
     ToolRequirement,
     UserIntent,
     WorkflowDecision,
@@ -29,6 +31,7 @@ from .schemas import (
 
 __all__ = [
     "AgentCapability",
+    "AccessRequestContext",
     "ChangeProposal",
     "ChangeSafetyDecision",
     "DiagnosticResult",
@@ -46,6 +49,7 @@ __all__ = [
     "MissingConfiguration",
     "RiskAssessment",
     "RiskFinding",
+    "TicketTriageResult",
     "ToolRequirement",
     "UserIntent",
     "WorkflowDecision",
