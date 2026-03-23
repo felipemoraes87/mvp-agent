@@ -68,9 +68,10 @@ export function SkillsPage() { // NOSONAR
   }, []);
 
   const visibleSkills = useMemo(() => {
-    if (!user) return skills;
-    if (user.role === "ADMIN" || user.role === "OPERATOR") return skills;
-    return skills.filter((skill) => skill.visibility === "shared" || skill.ownerTeamId === user.teamId);
+    const nonWorkflowSkills = skills.filter((skill) => skill.category !== ("workflow" as Skill["category"]));
+    if (!user) return nonWorkflowSkills;
+    if (user.role === "ADMIN" || user.role === "OPERATOR") return nonWorkflowSkills;
+    return nonWorkflowSkills.filter((skill) => skill.visibility === "shared" || skill.ownerTeamId === user.teamId);
   }, [skills, user]);
 
   useEffect(() => {

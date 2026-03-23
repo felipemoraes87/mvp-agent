@@ -11,10 +11,11 @@ COPY server/tsconfig.json ./
 COPY server/prisma ./prisma
 COPY server/scripts ./scripts
 COPY server/src ./src
-COPY server/docker-entrypoint.sh ./docker-entrypoint.sh
+COPY server/docker-entrypoint.sh /tmp/docker-entrypoint.sh
 COPY docs ../docs
 
 RUN mkdir -p runtime
+RUN tr -d '\r' < /tmp/docker-entrypoint.sh > /workspace/server/docker-entrypoint.sh && rm /tmp/docker-entrypoint.sh
 RUN npm run prisma:generate
 RUN npm run build
 RUN chmod +x /workspace/server/docker-entrypoint.sh
@@ -24,4 +25,4 @@ USER node
 
 EXPOSE 8787
 
-CMD ["./docker-entrypoint.sh"]
+CMD ["sh", "./docker-entrypoint.sh"]

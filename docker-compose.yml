@@ -112,6 +112,7 @@ services:
       context: .
       dockerfile: falcon_mcp/Dockerfile
     container_name: mvp-falcon-mcp
+    entrypoint: ["/bin/sh", "/tmp/docker-entrypoint-secrets.sh"]
     secrets:
       - source: falcon_client_id
         target: falcon_client_id
@@ -138,6 +139,7 @@ services:
       context: .
       dockerfile: server/Dockerfile
     container_name: mvp-server
+    entrypoint: ["sh", "./docker-entrypoint.sh"]
     secrets:
       - source: session_secret
         target: session_secret
@@ -184,6 +186,7 @@ services:
       dockerfile: server/Dockerfile
     container_name: mvp-server-bootstrap
     profiles: ["bootstrap"]
+    entrypoint: ["sh", "./docker-entrypoint.sh"]
     secrets:
       - source: session_secret
         target: session_secret
@@ -216,7 +219,7 @@ services:
     volumes:
       - server_runtime:/workspace/server/runtime
     restart: "no"
-    command: ["./docker-entrypoint.sh", "bootstrap"]
+    command: ["bootstrap"]
 
   client:
     build:

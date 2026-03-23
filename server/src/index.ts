@@ -10,7 +10,7 @@ import rateLimit from "express-rate-limit";
 import { nanoid } from "nanoid";
 import pinoHttp from "pino-http";
 import YAML from "yaml";
-import { AgentType, Prisma, ToolPolicy, type Role } from "@prisma/client";
+import { Prisma, ToolPolicy, type Role } from "@prisma/client";
 import { ZodError } from "zod";
 import { config, validateConfigForRuntime } from "./config.js";
 import { db } from "./db.js";
@@ -29,6 +29,7 @@ import {
   agentSchema,
   assignKnowledgeSchema,
   skillSchema,
+  workflowSchema,
   assignToolSchema,
   configImportSchema,
   customizationProtectionSchema,
@@ -41,11 +42,16 @@ import {
 } from "./validation.js";
 import { runSimulation } from "./simulator.js";
 import { sha256, validateSafeSimulationInput } from "./security.js";
-import { callAgnoCatalog, callAgnoChat, callAgnoModels, callAgnoSimulate } from "./agno.js";
+import { callAgnoCatalog, callAgnoChat, callAgnoModels, callAgnoSimulate, callAgnoWorkflowSetupCheck } from "./agno.js";
+import {
+  canAgentUseWriteTools,
+  classifyAgentFromLegacyType,
+} from "./agent-classification.js";
 
 type ZodSchemaLike<T> = { parse: (data: unknown) => T };
 
 const app = express();
+const workflowDb = db as typeof db & { workflow: any; agentWorkflow: any };
 const pinoHttpLogger = pinoHttp as unknown as (opts: unknown) => express.RequestHandler;
 const allowedOrigins = new Set([config.appOrigin, ...config.appOrigins]);
 
@@ -130,15 +136,24 @@ function firstParam(value: string | string[] | undefined): string {
   return value || "";
 }
 
-function fallbackAgentReply(type: string, agentName: string, text: string): string {
+function fallbackAgentReply(
+  type: string,
+  agentName: string,
+  text: string,
+  overrides?: { persona?: string | null; routingRole?: string | null; executionProfile?: string | null },
+): string {
+  const classification = {
+    ...classifyAgentFromLegacyType(type),
+    ...(overrides || {}),
+  };
   const lower = text.toLowerCase();
   const urgent = ["urgente", "critical", "incidente", "outage"].some((x) => lower.includes(x));
   const ticket = ["ticket", "chamado", "jira", "abrir"].some((x) => lower.includes(x));
 
-  if (type === "SUPERVISOR") {
+  if (classification.persona === "SUPERVISOR" || classification.routingRole === "ENTRYPOINT") {
     return `Entendi o contexto inicial e vou te ajudar com isso. ${urgent ? "Percebi sinais de prioridade alta." : "Parece um caso de prioridade normal."} Antes de direcionar para o especialista, quero confirmar: meu entendimento do problema esta correto?`;
   }
-  if (type === "TICKET") {
+  if (classification.routingRole === "TERMINAL" || classification.executionProfile !== "READ_ONLY") {
     return ticket
       ? "Posso preparar o chamado seguindo a documentacao, mas preciso confirmar se temos todos os dados obrigatorios (justificativa, impacto e evidencias)."
       : "Posso apoiar abertura de chamado quando o caso for documentado. Se quiser, te passo os dados obrigatorios que ainda faltam.";
@@ -146,19 +161,27 @@ function fallbackAgentReply(type: string, agentName: string, text: string): stri
   return `${agentName}: posso te orientar tecnicamente com passos praticos. Se faltar contexto, vou te fazer perguntas objetivas para confirmar o entendimento antes de recomendar proximo passo.${ticket ? " Se o caso exigir, direciono para @Ticket Agent com o contexto consolidado." : ""}`;
 }
 
-function fallbackReasoningSummary(type: string, text: string): string[] {
+function fallbackReasoningSummary(
+  type: string,
+  text: string,
+  overrides?: { persona?: string | null; routingRole?: string | null; executionProfile?: string | null },
+): string[] {
+  const classification = {
+    ...classifyAgentFromLegacyType(type),
+    ...(overrides || {}),
+  };
   const lower = text.toLowerCase();
   const signals = ["acesso", "revoke", "ticket", "incidente", "cloud", "iam", "phishing"].filter((x) => lower.includes(x));
   const signalLabel = signals.length ? signals.join(", ") : "sinais gerais do texto";
 
-  if (type === "SUPERVISOR") {
+  if (classification.persona === "SUPERVISOR" || classification.routingRole === "ENTRYPOINT") {
     return [
       "Classificacao inicial da demanda por risco e dominio.",
       `Sinais usados para decisao: ${signalLabel}.`,
       "Encaminhamento para especialista mais aderente.",
     ];
   }
-  if (type === "TICKET") {
+  if (classification.routingRole === "TERMINAL" || classification.executionProfile !== "READ_ONLY") {
     return [
       "Avaliacao de pre-condicoes para acao de escrita.",
       `Elementos considerados: ${signalLabel}.`,
@@ -172,6 +195,21 @@ function fallbackReasoningSummary(type: string, text: string): string[] {
   ];
 }
 
+function normalizeAgentPayload(input: ReturnType<typeof agentSchema.parse>) {
+  const fallback = classifyAgentFromLegacyType(input.type);
+  return {
+    ...input,
+    teamId: input.teamId || null,
+    tags: input.tags,
+    visibility: input.visibility,
+    persona: input.persona || fallback.persona,
+    routingRole: input.routingRole || fallback.routingRole,
+    executionProfile: input.executionProfile || fallback.executionProfile,
+    capabilities: input.capabilities.length ? input.capabilities : fallback.capabilities,
+    domains: input.domains.length ? input.domains : input.tags,
+  };
+}
+
 function isRuntimeManaged(managedBy?: string | null): boolean {
   return managedBy === "agno";
 }
@@ -182,6 +220,18 @@ function isUserCustomized(entity: { userCustomized?: boolean | null } | null | u
 
 function formatCustomizationWarning(entityType: string, entityName: string, note?: string | null): string {
   return `${entityType} "${entityName}" foi preservado porque esta marcado como customizacao do usuario${note ? ` (${note})` : ""}.`;
+}
+
+function serializeWorkflow(
+  item: {
+    agentLinks?: Array<{ agentId: string }>;
+    [key: string]: unknown;
+  },
+) {
+  return {
+    ...item,
+    participantAgentIds: (item.agentLinks || []).map((link) => link.agentId),
+  };
 }
 
 function ensureCsrf(req: express.Request, res: express.Response, next: express.NextFunction): void {
@@ -717,15 +767,16 @@ app.get("/api/agents", async (req, res) => {
 app.post("/api/agents", async (req, res) => {
   const r = getReq(req);
   const input = parse(agentSchema, req.body);
-  const ownerTeamId = input.teamId || null;
+  const payload = normalizeAgentPayload(input);
+  const ownerTeamId = payload.teamId || null;
 
-  if (!canMutateTeamResource(r.user!, ownerTeamId, input.isGlobal)) {
+  if (!canMutateTeamResource(r.user!, ownerTeamId, payload.isGlobal)) {
     await auditDenied(r, "agent:create", "Not allowed for this team/global scope", "agent");
     res.status(403).json({ error: "Policy denied" });
     return;
   }
 
-  const agent = await db.agent.create({ data: { ...input, teamId: ownerTeamId, tags: input.tags, visibility: input.visibility } });
+  const agent = await db.agent.create({ data: payload });
   await writeAudit({
     actorId: r.user!.id,
     actorRole: r.user!.role,
@@ -756,7 +807,7 @@ app.put("/api/agents/:id", async (req, res) => {
   }
 
   const input = parse(agentSchema, req.body);
-  const updated = await db.agent.update({ where: { id: current.id }, data: { ...input, teamId: input.teamId || null, tags: input.tags, visibility: input.visibility } });
+  const updated = await db.agent.update({ where: { id: current.id }, data: normalizeAgentPayload(input) });
   await writeAudit({
     actorId: r.user!.id,
     actorRole: r.user!.role,
@@ -873,8 +924,8 @@ app.post("/api/agents/:id/tools", async (req, res) => {
     return res.status(403).json({ error: "Tool visibility denied" });
   }
 
-  if (tool.policy === ToolPolicy.write && agent.type !== AgentType.TICKET) {
-    return res.status(400).json({ error: "Only Ticket Agent may receive write tools." });
+  if (tool.policy === ToolPolicy.write && !canAgentUseWriteTools(agent)) {
+    return res.status(400).json({ error: "Only agents with write-capable execution profile may receive write tools." });
   }
 
   if (tool.policy === ToolPolicy.write) {
@@ -1109,7 +1160,9 @@ app.get("/api/knowledge-sources", async (req, res) => {
 app.get("/api/skills", async (req, res) => {
   const user = getReq(req).user!;
   const items = await db.skill.findMany({
-    where: user.role === "TEAM_MAINTAINER" ? { OR: [{ ownerTeamId: user.teamId || "" }, { visibility: "shared" }] } : {},
+    where: user.role === "TEAM_MAINTAINER"
+      ? { AND: [{ category: { not: "workflow" } }, { OR: [{ ownerTeamId: user.teamId || "" }, { visibility: "shared" }] }] }
+      : { category: { not: "workflow" } },
     include: { agentLinks: true },
     orderBy: { name: "asc" },
   });
@@ -1213,6 +1266,132 @@ app.delete("/api/skills/:id", async (req, res) => {
   await db.skill.delete({ where: { id: current.id } });
   await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "skill:delete", entityType: "skill", entityId: current.id, beforeJson: current, correlationId: r.correlationId });
   res.json({ ok: true });
+});
+
+app.get("/api/workflows", async (req, res) => {
+  const user = getReq(req).user!;
+  const items = await workflowDb.workflow.findMany({
+    where: user.role === "TEAM_MAINTAINER" ? { OR: [{ ownerTeamId: user.teamId || "" }, { visibility: "shared" }] } : {},
+    include: { agentLinks: true },
+    orderBy: { name: "asc" },
+  });
+  res.json({ workflows: items.map((item: any) => serializeWorkflow(item)) });
+});
+
+app.post("/api/workflows", async (req, res) => {
+  const r = getReq(req);
+  const input = parse(workflowSchema, req.body);
+  if (!canMutateTeamResource(r.user!, input.ownerTeamId || null, false)) return res.status(403).json({ error: "Policy denied" });
+
+  const workflow = await workflowDb.workflow.create({
+    data: {
+      name: input.name,
+      description: input.description,
+      objective: input.objective,
+      preconditions: input.preconditions,
+      integrationKeys: input.integrationKeys,
+      steps: input.steps,
+      successCriteria: input.successCriteria,
+      outputFormat: input.outputFormat,
+      failureHandling: input.failureHandling,
+      setupPoints: input.setupPoints,
+      enabled: input.enabled,
+      visibility: input.visibility,
+      ownerTeamId: input.ownerTeamId || null,
+      managedBy: "portal",
+      runtimeSource: null,
+      agentLinks: input.participantAgentIds.length ? { create: input.participantAgentIds.map((agentId) => ({ agentId })) } : undefined,
+    },
+    include: { agentLinks: true },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "workflow:create", entityType: "workflow", entityId: workflow.id, afterJson: workflow, correlationId: r.correlationId });
+  res.status(201).json({ workflow: serializeWorkflow(workflow) });
+});
+
+app.put("/api/workflows/:id", async (req, res) => {
+  const r = getReq(req);
+  const current = await workflowDb.workflow.findUnique({ where: { id: req.params.id }, include: { agentLinks: true } });
+  if (!current) return res.status(404).json({ error: "Workflow not found" });
+  if (isRuntimeManaged(current.managedBy)) {
+    return res.status(409).json({ error: "Runtime-managed workflows must be changed in Agno runtime, not in the portal." });
+  }
+  if (!canMutateTeamResource(r.user!, current.ownerTeamId, false)) return res.status(403).json({ error: "Policy denied" });
+  const input = parse(workflowSchema, req.body);
+  const updated = await workflowDb.workflow.update({
+    where: { id: current.id },
+    data: {
+      name: input.name,
+      description: input.description,
+      objective: input.objective,
+      preconditions: input.preconditions,
+      integrationKeys: input.integrationKeys,
+      steps: input.steps,
+      successCriteria: input.successCriteria,
+      outputFormat: input.outputFormat,
+      failureHandling: input.failureHandling,
+      setupPoints: input.setupPoints,
+      enabled: input.enabled,
+      visibility: input.visibility,
+      ownerTeamId: input.ownerTeamId || null,
+      managedBy: current.managedBy || "portal",
+      runtimeSource: current.runtimeSource || null,
+      agentLinks: {
+        deleteMany: {},
+        create: input.participantAgentIds.map((agentId) => ({ agentId })),
+      },
+    },
+    include: { agentLinks: true },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "workflow:update", entityType: "workflow", entityId: updated.id, beforeJson: current, afterJson: updated, correlationId: r.correlationId });
+  res.json({ workflow: serializeWorkflow(updated) });
+});
+
+app.put("/api/workflows/:id/customization", async (req, res) => {
+  const r = getReq(req);
+  const current = await workflowDb.workflow.findUnique({ where: { id: req.params.id }, include: { agentLinks: true } });
+  if (!current) return res.status(404).json({ error: "Workflow not found" });
+  if (!canMutateTeamResource(r.user!, current.ownerTeamId, false)) return res.status(403).json({ error: "Policy denied" });
+  const input = parse(customizationProtectionSchema, req.body);
+  const updated = await workflowDb.workflow.update({
+    where: { id: current.id },
+    data: {
+      userCustomized: input.userCustomized,
+      customizationNote: input.customizationNote?.trim() || null,
+      customizationUpdatedAt: input.userCustomized ? new Date() : null,
+    },
+    include: { agentLinks: true },
+  });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "workflow:customization", entityType: "workflow", entityId: updated.id, beforeJson: current, afterJson: updated, correlationId: r.correlationId });
+  res.json({ workflow: serializeWorkflow(updated) });
+});
+
+app.delete("/api/workflows/:id", async (req, res) => {
+  const r = getReq(req);
+  const current = await workflowDb.workflow.findUnique({ where: { id: req.params.id } });
+  if (!current) return res.status(404).json({ error: "Workflow not found" });
+  if (isRuntimeManaged(current.managedBy)) {
+    return res.status(409).json({ error: "Runtime-managed workflows cannot be deleted from the portal." });
+  }
+  if (!canMutateTeamResource(r.user!, current.ownerTeamId, false)) return res.status(403).json({ error: "Policy denied" });
+  await workflowDb.workflow.delete({ where: { id: current.id } });
+  await writeAudit({ actorId: r.user!.id, actorRole: r.user!.role, actorTeam: r.user!.teamId, action: "workflow:delete", entityType: "workflow", entityId: current.id, beforeJson: current, correlationId: r.correlationId });
+  res.json({ ok: true });
+});
+
+app.post("/api/workflows/:id/setup-check", async (req, res) => {
+  const r = getReq(req);
+  const workflow = await workflowDb.workflow.findUnique({ where: { id: req.params.id } });
+  if (!workflow) return res.status(404).json({ error: "Workflow not found" });
+  if (!canReadTeamResource(r.user!, workflow.ownerTeamId, workflow.visibility, false)) {
+    return res.status(403).json({ error: "Policy denied" });
+  }
+  if (!config.agnoEnabled) return res.status(400).json({ error: "Agno integration disabled" });
+  const integrationKeys = Array.isArray(workflow.integrationKeys) ? workflow.integrationKeys.map((item: unknown) => String(item)) : [];
+  const setupCheck = await callAgnoWorkflowSetupCheck(config.agnoBaseUrl, { integrationKeys }, r.correlationId);
+  if (!setupCheck.data) {
+    return res.status(502).json({ error: setupCheck.error || "Failed to validate workflow setup" });
+  }
+  res.json(setupCheck.data);
 });
 
 app.post("/api/knowledge-sources", async (req, res) => {
@@ -1406,6 +1585,11 @@ app.post("/api/simulator/run", async (req, res) => {
           id: a.id,
           name: a.name,
           type: a.type,
+          persona: a.persona,
+          routingRole: a.routingRole,
+          executionProfile: a.executionProfile,
+          capabilities: a.capabilities,
+          domains: a.domains,
           description: a.description,
           prompt: a.prompt,
           tags: a.tags,
@@ -1496,6 +1680,11 @@ app.post("/api/agno/chat", async (req, res) => {
           id: agent.id,
           name: agent.name,
           type: agent.type,
+          persona: agent.persona,
+          routingRole: agent.routingRole,
+          executionProfile: agent.executionProfile,
+          capabilities: agent.capabilities,
+          domains: agent.domains,
           description: agent.description,
           prompt: agent.prompt,
           tags: agent.tags,
@@ -1541,10 +1730,18 @@ app.post("/api/agno/chat", async (req, res) => {
     logger.warn({ correlationId: r.correlationId, agentId: agent.id, error: agnoResponse.error }, "agno_chat_fallback");
   }
 
-  const reply = agno?.reply || fallbackAgentReply(agent.type, agent.name, safety.sanitized);
+  const reply = agno?.reply || fallbackAgentReply(agent.type, agent.name, safety.sanitized, {
+    persona: agent.persona,
+    routingRole: agent.routingRole,
+    executionProfile: agent.executionProfile,
+  });
   const reasoningSummary = agno?.reasoningSummary?.length
     ? agno.reasoningSummary
-    : fallbackReasoningSummary(agent.type, safety.sanitized);
+    : fallbackReasoningSummary(agent.type, safety.sanitized, {
+      persona: agent.persona,
+      routingRole: agent.routingRole,
+      executionProfile: agent.executionProfile,
+    });
 
   await writeAudit({
     actorId: r.user!.id,
@@ -1575,21 +1772,23 @@ app.post("/api/agno/chat", async (req, res) => {
 });
 
 async function exportConfigBundle() {
-  const [teams, users, agents, tools, skills, agentTools, agentKnowledge, agentSkills, knowledgeSources, handoffs, routingRules] = await Promise.all([
+  const [teams, users, agents, tools, skills, workflows, agentTools, agentKnowledge, agentSkills, agentWorkflows, knowledgeSources, handoffs, routingRules] = await Promise.all([
     db.team.findMany(),
     db.user.findMany({ select: { id: true, email: true, role: true, teamId: true } }),
     db.agent.findMany(),
     db.tool.findMany(),
     db.skill.findMany(),
+    workflowDb.workflow.findMany(),
     db.agentTool.findMany(),
     db.agentKnowledge.findMany(),
     db.agentSkill.findMany(),
+    workflowDb.agentWorkflow.findMany(),
     db.knowledgeSource.findMany(),
     db.handoff.findMany(),
     db.routingRule.findMany(),
   ]);
 
-  const payload = { teams, users, agents, tools, skills, agentTools, knowledgeSources, agentKnowledge, agentSkills, handoffs, routingRules };
+  const payload = { teams, users, agents, tools, skills, workflows, agentTools, knowledgeSources, agentKnowledge, agentSkills, agentWorkflows, handoffs, routingRules };
   const raw = JSON.stringify(payload);
   return {
     exportedAt: new Date().toISOString(),
@@ -1629,14 +1828,14 @@ app.post("/api/config/import", async (req, res) => {
   }
 
   const tools = parsed.payload.tools as Array<{ id: string; policy: string; name: string }>;
-  const agents = parsed.payload.agents as Array<{ id: string; type: string }>;
+  const agents = parsed.payload.agents as Array<{ id: string; type: string; executionProfile?: string | null; capabilities?: unknown }>;
   const links = parsed.payload.agentTools as Array<{ agentId: string; toolId: string; canWrite: boolean }>;
 
   for (const link of links) {
     const agent = agents.find((a) => a.id === link.agentId);
     const tool = tools.find((t) => t.id === link.toolId);
-    if (link.canWrite && agent?.type !== "TICKET") {
-      return res.status(400).json({ error: "Import policy violation: write tool assigned to non-ticket agent." });
+    if (link.canWrite && agent && !canAgentUseWriteTools(agent)) {
+      return res.status(400).json({ error: "Import policy violation: write tool assigned to non-write-capable agent." });
     }
     if (!agent || !tool) {
       return res.status(400).json({ error: "Import policy violation: invalid agent/tool link detected." });
@@ -1647,9 +1846,12 @@ app.post("/api/config/import", async (req, res) => {
     await tx.handoff.deleteMany();
     await tx.agentKnowledge.deleteMany();
     await tx.agentSkill.deleteMany();
+    const workflowTx = tx as typeof tx & { workflow: any; agentWorkflow: any };
+    await workflowTx.agentWorkflow.deleteMany();
     await tx.agentTool.deleteMany();
     await tx.routingRule.deleteMany();
     await tx.knowledgeSource.deleteMany();
+    await workflowTx.workflow.deleteMany();
     await tx.skill.deleteMany();
     await tx.tool.deleteMany();
     await tx.agent.deleteMany();
@@ -1659,10 +1861,12 @@ app.post("/api/config/import", async (req, res) => {
     for (const a of parsed.payload.agents) await tx.agent.create({ data: a });
     for (const t of parsed.payload.tools) await tx.tool.create({ data: t });
     for (const s of parsed.payload.skills || []) await tx.skill.create({ data: s });
+    for (const workflow of parsed.payload.workflows || []) await workflowTx.workflow.create({ data: workflow });
     for (const k of parsed.payload.knowledgeSources) await tx.knowledgeSource.create({ data: k });
     for (const at of parsed.payload.agentTools) await tx.agentTool.create({ data: at });
     for (const ak of parsed.payload.agentKnowledge) await tx.agentKnowledge.create({ data: ak });
     for (const ask of parsed.payload.agentSkills || []) await tx.agentSkill.create({ data: ask });
+    for (const aw of parsed.payload.agentWorkflows || []) await workflowTx.agentWorkflow.create({ data: aw });
     for (const h of parsed.payload.handoffs) await tx.handoff.create({ data: h });
     for (const rr of parsed.payload.routingRules) await tx.routingRule.create({ data: rr });
   });
@@ -1690,6 +1894,7 @@ app.post("/api/catalog/sync", ensureAdmin, async (req, res) => {
   const skipped: string[] = [];
   let syncedTools = 0;
   let syncedSkills = 0;
+  let syncedWorkflows = 0;
 
   for (const tool of catalog.tools) {
     const ownerTeam = tool.ownerTeamKey ? teamByKey.get(tool.ownerTeamKey) : null;
@@ -1793,10 +1998,112 @@ app.post("/api/catalog/sync", ensureAdmin, async (req, res) => {
     syncedSkills += 1;
   }
 
+  for (const workflow of catalog.workflows || []) {
+    const ownerTeam = workflow.ownerTeamKey ? teamByKey.get(workflow.ownerTeamKey) : null;
+    const currentWorkflow = await workflowDb.workflow.findFirst({
+      where: { name: workflow.name, ownerTeamId: ownerTeam?.id || null },
+      include: { agentLinks: true },
+    });
+    if (isUserCustomized(currentWorkflow)) {
+      skipped.push(formatCustomizationWarning("Workflow", workflow.name, currentWorkflow?.customizationNote));
+      continue;
+    }
+    const participantAgentIds = workflow.linkedAgentNames?.length
+      ? (await db.agent.findMany({ where: { name: { in: workflow.linkedAgentNames } }, select: { id: true } })).map((agent) => ({ agentId: agent.id }))
+      : [];
+    if (currentWorkflow) {
+      await workflowDb.workflow.update({
+        where: { id: currentWorkflow.id },
+        data: {
+          description: workflow.description || workflow.objective,
+          objective: workflow.objective,
+          preconditions: workflow.preconditions,
+          integrationKeys: workflow.integrationKeys,
+          steps: workflow.steps,
+          successCriteria: workflow.successCriteria,
+          outputFormat: workflow.outputFormat,
+          failureHandling: workflow.failureHandling,
+          setupPoints: workflow.setupPoints,
+          enabled: workflow.enabled,
+          visibility: workflow.visibility === "shared" ? "shared" : "private",
+          ownerTeamId: ownerTeam?.id || null,
+          managedBy: "agno",
+          runtimeSource: workflow.runtimeSource || "agno",
+          agentLinks: {
+            deleteMany: {},
+            create: participantAgentIds,
+          },
+        },
+      });
+      syncedWorkflows += 1;
+      continue;
+    }
+    await workflowDb.workflow.create({
+      data: {
+        name: workflow.name,
+        description: workflow.description || workflow.objective,
+        objective: workflow.objective,
+        preconditions: workflow.preconditions,
+        integrationKeys: workflow.integrationKeys,
+        steps: workflow.steps,
+        successCriteria: workflow.successCriteria,
+        outputFormat: workflow.outputFormat,
+        failureHandling: workflow.failureHandling,
+        setupPoints: workflow.setupPoints,
+        enabled: workflow.enabled,
+        visibility: workflow.visibility === "shared" ? "shared" : "private",
+        ownerTeamId: ownerTeam?.id || null,
+        managedBy: "agno",
+        runtimeSource: workflow.runtimeSource || "agno",
+        agentLinks: participantAgentIds.length ? { create: participantAgentIds } : undefined,
+      },
+    });
+    syncedWorkflows += 1;
+  }
+
+  const legacyWorkflowSkills = await db.skill.findMany({
+    where: { managedBy: "agno", category: "workflow" },
+    include: { agentLinks: true },
+  });
+  for (const legacy of legacyWorkflowSkills) {
+    const existingWorkflow = await workflowDb.workflow.findFirst({
+      where: { name: legacy.name, ownerTeamId: legacy.ownerTeamId || null },
+    });
+    if (!existingWorkflow) {
+      await workflowDb.workflow.create({
+        data: {
+          name: legacy.name,
+          description: legacy.description,
+          objective: legacy.description,
+          preconditions: [],
+          integrationKeys: [],
+          steps: [legacy.prompt],
+          successCriteria: [],
+          outputFormat: "structured summary",
+          failureHandling: [],
+          setupPoints: [],
+          enabled: legacy.enabled,
+          visibility: legacy.visibility,
+          ownerTeamId: legacy.ownerTeamId || null,
+          managedBy: legacy.managedBy,
+          runtimeSource: legacy.runtimeSource,
+          userCustomized: legacy.userCustomized,
+          customizationNote: legacy.customizationNote,
+          customizationUpdatedAt: legacy.customizationUpdatedAt,
+          agentLinks: legacy.agentLinks.length ? { create: legacy.agentLinks.map((link) => ({ agentId: link.agentId })) } : undefined,
+        },
+      });
+      syncedWorkflows += 1;
+    }
+    await db.agentSkill.deleteMany({ where: { skillId: legacy.id } });
+    await db.skill.delete({ where: { id: legacy.id } });
+  }
+
   res.json({
     ok: true,
     tools: syncedTools,
     skills: syncedSkills,
+    workflows: syncedWorkflows,
     knowledgeSources: catalog.knowledgeSources.length,
     skipped,
   });

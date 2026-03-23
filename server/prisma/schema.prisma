@@ -19,6 +19,28 @@ enum AgentType {
   TICKET
 }
 
+enum AgentPersona {
+  SUPERVISOR
+  SPECIALIST
+  ANALYST
+  EXECUTOR
+}
+
+enum AgentRoutingRole {
+  ENTRYPOINT
+  DISPATCHER
+  SPECIALIST
+  TERMINAL
+  FALLBACK
+}
+
+enum AgentExecutionProfile {
+  READ_ONLY
+  WRITE_GUARDED
+  WRITE_ALLOWED
+  APPROVAL_REQUIRED
+}
+
 enum ToolType {
   slack
   confluence
@@ -58,6 +80,7 @@ model Team {
   agents           Agent[]
   tools            Tool[]
   skills           Skill[]
+  workflows        Workflow[]
   knowledgeSources KnowledgeSource[]
   maintainers      User[]
   routingRules     RoutingRule[]
@@ -126,6 +149,11 @@ model Agent {
   runtimeConfig     Json?
   tags              Json
   type              AgentType
+  persona           AgentPersona           @default(SPECIALIST)
+  routingRole       AgentRoutingRole       @default(SPECIALIST)
+  executionProfile  AgentExecutionProfile  @default(READ_ONLY)
+  capabilities      Json                   @default("[]")
+  domains           Json                   @default("[]")
   isGlobal          Boolean            @default(false)
   visibility        String             @default("private")
   userCustomized    Boolean            @default(false)
@@ -135,6 +163,7 @@ model Agent {
   team              Team?              @relation(fields: [teamId], references: [id])
   toolLinks         AgentTool[]
   skillLinks        AgentSkill[]
+  workflowLinks     AgentWorkflow[]
   knowledgeLinks    AgentKnowledge[]
   outgoingHandoffs  Handoff[]          @relation("FromAgent")
   incomingHandoffs  Handoff[]          @relation("ToAgent")
@@ -201,6 +230,34 @@ model Skill {
   @@unique([name, ownerTeamId])
 }
 
+model Workflow {
+  id                     String          @id @default(cuid())
+  name                   String
+  description            String
+  objective              String
+  preconditions          Json            @default("[]")
+  integrationKeys        Json            @default("[]")
+  steps                  Json            @default("[]")
+  successCriteria        Json            @default("[]")
+  outputFormat           String
+  failureHandling        Json            @default("[]")
+  setupPoints            Json            @default("[]")
+  enabled                Boolean         @default(true)
+  visibility             String          @default("private")
+  managedBy              String          @default("portal")
+  runtimeSource          String?
+  userCustomized         Boolean         @default(false)
+  customizationNote      String?
+  customizationUpdatedAt DateTime?
+  ownerTeamId            String?
+  ownerTeam              Team?           @relation(fields: [ownerTeamId], references: [id])
+  agentLinks             AgentWorkflow[]
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  @@unique([name, ownerTeamId])
+}
+
 model AgentTool {
   id       String  @id @default(cuid())
   agentId  String
@@ -221,6 +278,16 @@ model AgentSkill {
   skill   Skill  @relation(fields: [skillId], references: [id])
 
   @@unique([agentId, skillId])
+}
+
+model AgentWorkflow {
+  id         String   @id @default(cuid())
+  agentId    String
+  workflowId String
+  agent      Agent    @relation(fields: [agentId], references: [id])
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+
+  @@unique([agentId, workflowId])
 }
 
 model KnowledgeSource {

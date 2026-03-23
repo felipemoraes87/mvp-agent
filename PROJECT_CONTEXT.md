@@ -1,329 +1,333 @@
 # PROJECT_CONTEXT.md
 
-Este arquivo centraliza o contexto tecnico do projeto para novas sessoes de coding.
+Este arquivo resume o estado tecnico atual do `MVP Agent` para novas sessoes de coding.
 
-Referencias oficiais usadas para a integracao:
+## 1. Objetivo do Produto
 
-- `https://docs.agno.com/introduction`
-- `https://docs.agno.com/cookbook/models/local/ollama`
+`MVP Agent` e um portal administrativo + runtime local para modelagem, operacao e governanca de agentes. O foco atual do produto esta em:
 
-## 1) Objetivo do Produto
+- portal de administracao de times, agentes, workflows, tools e knowledge
+- simulacao e chat com runtime Agno
+- IAM Team com coordenacao, reasoning, knowledge, risk e guardrails
+- arquitetura extensivel para MCPs, APIs e future control plane
 
-Sec Agent Studio e um MVP local para orquestracao de agentes de seguranca por dominio (HRM, IAM/IGA, CloudSec, CorpSec, AppSec, OffSec, Detection&Response, Vuln Mgmt), com autonomia de configuracao e governanca forte.
+## 2. Arquitetura Atual
 
-### Metas principais
+### 2.1 Client
 
-- autonomia dos times para configurar agentes, handoffs e regras
-- segregacao de funcoes (SoD) para operacoes de escrita
-- policy engine e controles server-side
-- trilha de auditoria para mudancas e simulacoes
-- simulacao local sem dependencias reais externas
+- Stack: React + Vite + TypeScript + React Router + React Flow
+- Porta default: `5173`
+- Layout principal: `client/src/components/AppLayout.tsx`
+- Navegacao principal: `client/src/components/Sidebar.tsx`
+- Rotas: `client/src/App.tsx`
 
-## 2) Arquitetura Atual
+Paginas relevantes:
 
-### 2.1 Server
+- `DashboardPage`
+- `AgentsPage`
+- `WorkflowsPage`
+- `ToolsPage`
+- `SkillsPage`
+- `KnowledgePage`
+- `GraphPage`
+- `GraphTestPage`
+- `SimulatorPage`
+- `ExecDashboardPage`
+- `ConfigurationPage`
+- `DebugPage`
+- `LogsPage`
+- `DocsPage`
+- `AccessPage`
 
-- Stack: Express + TypeScript + Prisma Client + SQLite
+Pontos importantes:
+
+- `Workflows` agora e entidade first-class no portal
+- `SkillsPage` nao deve mais ser usada para representar workflows
+- `GraphPage` e a tela operacional principal de visualizacao
+- `Graph Test` e um laboratorio grafico/control plane isolado
+
+### 2.2 Server
+
+- Stack: Express + TypeScript + Prisma Client + PostgreSQL
 - Porta default: `8787`
 - Arquivo principal: `server/src/index.ts`
 
 Componentes chave:
 
-- `src/policy.ts` regras de autorizacao/SoD
-- `src/security.ts` guardrails de entrada
-- `src/simulator.ts` classificador/rankeador de simulacao
-- `src/agno.ts` integracao HTTP com Agno service
-- `src/audit.ts` escrita em audit log
-- `src/init-db.ts` criacao de schema SQLite via SQL raw
-- `prisma/seed.ts` dados iniciais
-- `scripts/apply-domain-context.ts` aplica contexto por dominio
+- `src/policy.ts`
+- `src/security.ts`
+- `src/simulator.ts`
+- `src/agno.ts`
+- `src/validation.ts`
+- `src/agent-classification.ts`
+- `prisma/schema.prisma`
+- `prisma/seed.ts`
+- `scripts/apply-domain-context.ts`
+- `scripts/sync-agno-catalog.ts`
 
-### 2.2 Client
+Mudancas relevantes:
 
-- Stack: React + Vite + TypeScript + Tailwind + React Flow
-- Porta default: `5173`
-
-Paginas:
-
-- `LoginPage`
-- `DashboardPage`
-- `GraphPage`
-- `PlaygroundPage` (arquivo `SimulatorPage.tsx`)
-- `AgentsPage`
-- `ToolsPage`
-- `KnowledgePage`
-- `AccessPage` (somente Admin)
-
-Componentes principais:
-
-- `Sidebar`, `AppLayout`, `RequireAuth`
-- `AgentNode`, `ConnectionEdge`, `InspectorPanel`, `ToolBadge`
+- o banco atual e PostgreSQL, nao SQLite
+- `Workflow` virou model first-class
+- `Agent` ganhou `persona`, `routingRole`, `executionProfile`, `capabilities` e `domains`
+- o sync do catalogo consome `/catalog` do Agno e materializa agentes, tools, skills e workflows
+- o start/restart do `server` executa migrations e sync de catalogo
 
 ### 2.3 Agno Service
 
 - Stack: Python + FastAPI + Agno
-- Pasta: `agno_service/`
 - Porta default: `8010`
-- Modelo local default: `qwen2.5:3b` via Ollama
-- Provider de LLM suportado: `ollama` (default) e `openai` (via API key)
-- Endpoints:
-  - `GET /health`
-  - `POST /simulate`
-  - `POST /chat`
+- Arquivo principal: `agno_service/app.py`
+
+Endpoints principais:
+
+- `GET /health`
+- `GET /catalog`
+- `POST /simulate`
+- `POST /chat`
+
+IAM Team:
+
+- codigo em `agno_service/iam_team/`
+- coordenador em `coordinator.py`
+- knowledge layer em `knowledge_layer.py`
+- entitlement reasoning em `entitlement_reasoning.py`
+- risk analysis em `risk_analysis.py`
+- change guard em `change_guard.py`
+- integration setup flow em `integration_registry.py`
+- workflows em `workflows.py`
+- investigation memory em `memory.py`
 
 ### 2.4 Docker Compose
 
 Arquivo: `docker-compose.yml`
 
-Servicos:
+Servicos principais:
 
-- `ollama` (`11434`)
-- `ollama-init` (pull automatico do modelo)
-- `agno_service` (`8010`)
-- `server` (`8787`)
-- `client` (`5173`)
+- `postgres`
+- `ollama`
+- `agno_service`
+- `server`
+- `client`
+- `falcon_mcp`
 
-Volumes persistentes:
+Comportamento importante:
 
-- `ollama_data` (modelos locais)
-- `server_runtime` (SQLite em `server/runtime/dev.db`)
+- `server` aplica migrations e executa `sync:agno-catalog` no start
+- `client` precisa de rebuild para refletir mudancas de UI no ambiente docker
 
-## 3) Modelo de Dados Relevante
+## 3. Modelo de Dados Relevante
 
 Entidades centrais:
 
 - `Team`
 - `User`
 - `Group`
-- `GroupMembership`
 - `Agent`
+- `Workflow`
 - `Tool`
+- `Skill`
 - `KnowledgeSource`
-- `AgentTool`
-- `AgentKnowledge`
 - `Handoff`
 - `RoutingRule`
 - `AuditLog`
 
-Relacionamentos criticos:
+Entidades de ligacao:
 
-- `Team -> Agents/Tools/Knowledge/RoutingRules`
-- `User -> Team (opcional)`
-- `Group -> Team (opcional global)`
-- `GroupMembership -> Group + User`
-- `Agent <-> Tool` via `AgentTool`
-- `Agent <-> KnowledgeSource` via `AgentKnowledge`
-- `Handoff` representa edge direcionado no grafo
+- `AgentTool`
+- `AgentSkill`
+- `AgentWorkflow`
+- `AgentKnowledge`
+- `GroupMembership`
 
-## 4) Endpoints API (Resumo)
+Pontos importantes do model:
 
-Auth:
+- `Workflow` tem `objective`, `preconditions`, `integrationKeys`, `steps`, `successCriteria`, `failureHandling` e `setupPoints`
+- `Agent` separa identidade e comportamento operacional via `persona`, `routingRole` e `executionProfile`
+- `tags` ainda existem, mas nao sao a unica base de comportamento
 
-- `GET /api/auth/csrf`
-- `POST /api/auth/login`
-- `POST /api/auth/logout`
-- `GET /api/auth/me`
+## 4. Catalogo e Sync
 
-Core:
+Fonte principal:
 
-- `GET /api/dashboard`
-- `GET /api/teams`
-- CRUD de `agents`, `tools`, `knowledge-sources`
-- CRUD de `handoffs` e `routing-rules`
-- `POST /api/simulator/run`
-- `POST /api/agno/chat`
-- `GET /api/config/export`
-- `POST /api/config/import`
-- `GET /api/audit-logs`
+- `agno_service/app.py` publica `/catalog`
 
-Access Management (Admin only):
+Consumo:
 
-- `GET/POST /api/access/users`
-- `PUT /api/access/users/:id`
-- `POST /api/access/users/:id/reset-password`
-- `GET/POST /api/access/groups`
-- `PUT/DELETE /api/access/groups/:id`
-- `POST /api/access/groups/:id/members`
-- `DELETE /api/access/groups/:id/members/:userId`
+- `server/scripts/sync-agno-catalog.ts`
 
-## 5) Regras de Seguranca Atuais
+Responsabilidades da sync:
 
-- RBAC com 3 papeis: `ADMIN`, `TEAM_MAINTAINER`, `OPERATOR`
-- Policy engine server-side com default deny
-- SoD: tool write restrita a agente `TICKET`
-- TeamMaintainer nao pode editar supervisor global nem write tools
-- CSRF obrigatorio em mutacoes
-- Rate-limit global e login
-- Helmet + CORS restrito por `APP_ORIGIN` + `APP_ORIGINS` (lista CSV opcional)
-- Auditoria para mudancas relevantes
+- upsert de agentes runtime-managed
+- publicacao de tools/skills/workflows
+- preservacao de customizacoes do usuario
+- ligacao de handoffs e routing rules
+- migracao de workflows legacy que antes vinham como `Skill(category=workflow)`
 
-## 6) Playground: Como Funciona (Agno + Fallback)
+Regra operacional:
 
-Entrada:
+- se algo novo nao apareceu no portal, primeiro conferir o `/catalog`
+- depois reiniciar `server` para disparar a sync
 
-- mensagem + suggestedTeam + contextTags
+## 5. IAM Team
 
-Processamento:
+Documentacao detalhada:
 
-1. backend tenta `Agno Service /simulate` com contexto de times/agentes/regras
-2. se Agno estiver indisponivel, cai no simulador local (`src/simulator.ts`)
-3. resultado retorna time, agente, confianca, justificativa, top3 e path
+- `docs/iam-team-architecture.md`
 
-Melhorias recentes:
+Agentes/camadas ativas:
 
-- integracao com Agno e LLM local via Ollama
-- chat por agente via `POST /api/agno/chat`
-- resumo de decisao em alto nivel no chat (`reasoningSummary`)
-- configuracoes avancadas de runtime expostas na GUI
+- `IAM Orchestrator`
+- `JumpCloud Directory Analyst`
+- `GitHub IAM Agent`
+- `IGA Agent`
+- `BigQuery IAM/Security Agent`
+- `Jira/Confluence IAM Agent`
+- `IAM Knowledge Agent`
+- `Entitlement Reasoning Agent`
+- `IAM Risk Analyst`
+- `Change Guard / Approval Agent`
 
-## 7) Contexto de Dominio (Playbooks)
+Capacidades do coordenador:
 
-Arquivos em `docs/team-playbooks/`:
+- decidir entre workflow conhecido e `open_investigation`
+- exigir setup sequencial de integracoes
+- consolidar evidencias e gaps
+- acionar knowledge, reasoning, risk e change guard
 
-- `hrm-playbook.md`
-- `iam-iga-playbook.md`
-- `cloudsec-playbook.md`
-- `corpsec-playbook.md`
-- `appsec-playbook.md`
-- `offsec-playbook.md`
-- `dnr-playbook.md`
-- `vuln-mgmt-playbook.md`
+## 6. Setup Sequencial de Integracoes
 
-O script `npm run context:apply`:
+Local:
 
-- atualiza prompts/tags dos especialistas
-- atualiza keywords/tags das routing rules
-- atualiza knowledge sources com URLs file:// dos playbooks
-- garante vinculo `AgentKnowledge`
+- `agno_service/iam_team/integration_registry.py`
 
-## 8) Decisoes Tecnicas Importantes
+Padrao:
 
-1. **Schema SQLite manual**
+- cada integracao declara requisitos
+- se faltar configuracao, o runtime pede o primeiro campo faltante
+- o fluxo nao quebra quando um conector ainda nao existe
+- conectores indisponiveis devem retornar uma resposta controlada de indisponibilidade
 
-- o projeto nao usa migracao Prisma tradicional neste ambiente
-- schema e criado via `server/src/init-db.ts`
-- comando oficial para isso: `npm run prisma:migrate`
+Integracoes previstas:
 
-2. **CSRF no client**
+- JumpCloud
+- GitHub
+- IGA
+- BigQuery
+- Jira
+- Confluence
+- Slack
+- Google Drive
+- GCP Asset
+- Cloud Logging
+- IAM Analyzer
+- Findings Store
 
-- token e obtido em `/api/auth/csrf`
-- token do login e persistido no estado do cliente
-- retry automatico existe para erro `Invalid CSRF token`
+## 7. Seguranca e Governanca
 
-3. **Filtro de time no grafo**
+- papeis: `ADMIN`, `TEAM_MAINTAINER`, `OPERATOR`
+- policy engine server-side com default deny
+- CSRF em mutacoes
+- auditoria para alteracoes relevantes
+- write-capable passa por `executionProfile` e guardrails
+- `Change Guard` deve ficar antes de qualquer escrita sensivel
+- logs nao devem vazar segredos
 
-- Admin possui opcao `Todos os times`
-- Team Maintainer ve escopo do proprio time + globais
+Observacao importante:
 
-4. **Auto layout do grafo**
+- regras antigas do tipo "so `TICKET` escreve" foram sendo substituidas pela modelagem nova com `executionProfile` e capacidades
 
-- layout orientado por handoffs em camadas
-- reduz sobreposicao e melhora leitura
+## 8. Estado Atual de UI/Grafo
 
-5. **Configuracoes avancadas Agno no simulador**
+`GraphPage`:
 
-- `modelId` (modelo Ollama)
-- `temperature` e `maxTokens`
-- `reasoning`, `reasoningMinSteps`, `reasoningMaxSteps`
-- `addHistoryToContext`, `historySessions`
-- `addStateToContext`
-- `markdown` e `showToolCalls`
+- usado para mapa de times e visualizacao de workflows
+- passou por varias iteracoes recentes e merece leitura cuidadosa antes de mexer
+- a UX atual privilegia selecao de time/workflow, visualizacao manual e exploracao do fluxo
 
-## 9) Rotina de Desenvolvimento Recomendada
+`Graph Test`:
+
+- pagina separada para experimentar control plane/observability
+- codigo em `client/src/features/graphTest/`
+- deve continuar isolada de `GraphPage` para nao quebrar o fluxo principal
+
+## 9. Desenvolvimento Recomendado
 
 ### Subir ambiente
 
-Opcao recomendada:
+```bash
+docker compose up -d --build
+```
 
-1. `docker compose up -d --build`
-2. validar `GET http://localhost:8787/api/health`
-3. validar `GET http://localhost:8010/health`
-4. abrir `http://localhost:5173`
+Checks minimos:
 
-Opcao manual:
+- `http://localhost:8787/api/health`
+- `http://localhost:8010/health`
+- `http://localhost:8010/catalog`
+- `http://localhost:5173`
 
-1. server: `npm run dev`
-2. ollama runtime: `ollama serve`
-3. agno service: `uvicorn app:app --host 0.0.0.0 --port 8010 --reload`
-4. client: `npm run dev`
-5. validar `GET /api/health` e `GET http://localhost:8010/health`
+### Quando mexer no backend
 
-No Windows, se `python` nao estiver no PATH:
+```bash
+cd server
+npm run prisma:generate
+npm run prisma:migrate
+npm run build
+npm run test
+```
 
-- usar `py -m uvicorn app:app --host 0.0.0.0 --port 8010 --reload`
-- usar `py -m pip install -r requirements.txt` no `agno_service/`
+### Quando mexer no Agno
 
-### Reaplicar base/contexto
+```bash
+cd agno_service
+.\.venv\Scripts\python.exe -m unittest tests.test_iam_team tests.test_falcon_mcp_tool
+```
 
-1. `npm run prisma:migrate`
-2. `npm run prisma:seed`
-3. `npm run context:apply`
+### Quando mexer no client
 
-### Validar build
+```bash
+cd client
+npm run build
+docker compose up -d --build client
+```
 
-1. `cd server && npm run build`
-2. `cd client && npm run build`
+## 10. Troubleshooting Rapido
 
-## 10) Troubleshooting Rapido
+### Mudanca nao apareceu no portal
 
-### `Failed to fetch` no frontend
+1. verificar `/catalog`
+2. verificar logs do `server`
+3. reiniciar `server`
+4. se for UI, rebuild do `client`
 
-- normalmente backend parado
-- verificar healthcheck em `8787`
-- confirmar `APP_ORIGIN`/`APP_ORIGINS` incluem a URL usada no browser (ex.: `http://192.168.1.50:5173`)
+### Workflow/agent sumiu ou voltou apos restart
 
-### Login falhando por validacao
+- checar `server/scripts/sync-agno-catalog.ts`
+- olhar regras de preservacao de customizacao e tombstones de handoff
 
-- contas seed usam dominio local (`@local`)
-- usar credenciais seed do README
+### Mudanca de UI nao refletiu
 
-### Simulacao com resultado ruim
+- o `client` em Docker precisa de rebuild
+- depois usar `Ctrl + F5`
 
-- rodar `npm run context:apply`
-- revisar routing rules/tags
-- revisar knowledge links do especialista
-- validar Ollama local e Agno service ativos
+### Problema de banco
 
-### Agno `/chat` ou `/simulate` sem inferencia
+- verificar `DATABASE_URL`
+- reaplicar `npm run prisma:migrate`
 
-- se `GET /health` do Agno responde e o chat retorna erro de Ollama, o problema e somente no runtime do modelo
-- iniciar `ollama serve` e baixar o modelo (`ollama pull qwen2.5:3b`)
-- manter `AGNO_BASE_URL=http://localhost:8010` no `server/.env`
+## 11. Checklist para Nova Sessao
 
-### Docker Compose sem resposta da LLM
+Antes de mexer:
 
-- validar `docker compose ps` (todos os containers em `running`)
-- validar logs: `docker compose logs -f ollama ollama-init agno_service`
-- confirmar modelo no container:
-  - `docker compose exec ollama ollama list`
-  - se ausente, `docker compose exec ollama ollama pull qwen2.5:3b`
+1. ler `README.md`
+2. ler este arquivo
+3. ler `docs/iam-team-architecture.md` se o assunto for IAM Team
+4. verificar `git status`
+5. validar healthchecks
 
-### Prisma generate com erro de arquivo bloqueado no Windows
+Depois de mexer:
 
-- encerrar processos node do server
-- reexecutar `npm run prisma:generate`
-
-## 11) Backlog Tecnico Sugerido
-
-1. test suite automatizada (policy/RBAC/simulator)
-2. CI pipeline com lint/build/tests
-3. policy matrix por grupo
-4. soft delete para users/grupos
-5. observabilidade com metricas de endpoint/latencia
-6. import/export com validacao criptografica expandida
-
-## 12) Checklist para Nova Sessao de Coding
-
-Antes de codar:
-
-1. Ler `README.md`
-2. Ler este `PROJECT_CONTEXT.md`
-3. Ler `GUI_GUIDE_PTBR.md` para comportamento esperado da UI
-4. Validar ambiente rodando (`/api/health` + login)
-5. Confirmar se contexto de dominio foi aplicado
-
-Depois de alterar:
-
-1. build server/client
-2. smoke test das rotas afetadas
-3. atualizar README/contexto se fluxo mudou
+1. rodar build/test do stack afetado
+2. se mudou catalogo/runtime, validar `/catalog`
+3. se mudou UI, rebuild do `client`
+4. atualizar documentacao se fluxo mudou

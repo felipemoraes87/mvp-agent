@@ -5,6 +5,7 @@ import { AppLayout } from "./components/AppLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { AgentsPage } from "./pages/AgentsPage";
+import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { ToolsPage } from "./pages/ToolsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
 import { GraphPage } from "./pages/GraphPage";
@@ -17,6 +18,7 @@ import { ConfigurationPage } from "./pages/ConfigurationPage";
 import { DebugPage } from "./pages/DebugPage";
 import { LogsPage } from "./pages/LogsPage";
 import { DocsPage } from "./pages/DocsPage";
+import { GraphTestPage } from "./pages/GraphTestPage";
 
 function App() {
   return (
@@ -34,11 +36,13 @@ function App() {
           >
             <Route index element={<DashboardPage />} />
             <Route path="agents" element={<AgentsPage />} />
+            <Route path="workflows" element={<WorkflowsPage />} />
             <Route path="tools" element={<ToolsPage />} />
             <Route path="skills" element={<SkillsPage />} />
             <Route path="knowledge" element={<KnowledgePage />} />
             <Route path="channels" element={<ChannelsPage />} />
             <Route path="graph" element={<GraphPage />} />
+            <Route path="graph-test" element={<GraphTestPage />} />
             <Route path="playground" element={<SimulatorPage />} />
             <Route path="exec-dashboard" element={<ExecDashboardPage />} />
             <Route path="configuration" element={<ConfigurationPage />} />

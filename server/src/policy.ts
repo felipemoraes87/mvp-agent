@@ -1,4 +1,5 @@
-﻿import type { Agent, Role, Tool } from "@prisma/client";
+import type { Agent, Role, Tool } from "@prisma/client";
+import { isSupervisorAgent } from "./agent-classification.js";
 import type { SessionUser } from "./types.js";
 
 type PolicyInput = {
@@ -34,7 +35,7 @@ export function evaluatePolicy(input: PolicyInput): PolicyResult { // NOSONAR
       return { allow: false, reason: "Cross-team change denied." };
     }
 
-    if (action === "agent:update" && agent?.type === "SUPERVISOR" && agent.isGlobal) {
+    if (action === "agent:update" && agent && isSupervisorAgent(agent) && agent.isGlobal) {
       return { allow: false, reason: "Global Supervisor can only be edited by Admin." };
     }
 

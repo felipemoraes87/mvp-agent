@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { apiGet, apiPost } from "../lib/api";
 import type { Agent, AgentChatMeta, RoutingRule, Team } from "../lib/types";
 import { HelpTip } from "../components/HelpTip";
@@ -216,6 +216,7 @@ function buildAgentDefaultAdvanced(agent: Agent | null, options: Record<ModelPro
 }
 
 export function SimulatorPage() {
+  const location = useLocation();
   const [teams, setTeams] = useState<Team[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
@@ -269,6 +270,15 @@ export function SimulatorPage() {
     if (!ruleTargetAgentId && agentRes.agents[0]) setRuleTargetAgentId(agentRes.agents[0].id);
     if (!chatAgentId && agentRes.agents[0]) setChatAgentId(agentRes.agents[0].id);
   };
+
+  useEffect(() => {
+    const launch = (location.state as { workflowLaunch?: { workflowName?: string; message?: string } } | null)?.workflowLaunch;
+    if (!launch?.message) return;
+    setMessage(launch.message);
+    if (launch.workflowName) {
+      setError(`Workflow preloaded: ${launch.workflowName}`);
+    }
+  }, [location.state]);
 
   useEffect(() => {
     void loadRules();

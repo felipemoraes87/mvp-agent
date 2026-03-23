@@ -57,6 +57,7 @@ export function InspectorPanel({ // NOSONAR
   onAssignSkill: (skillId: string) => Promise<void>;
   onRemoveSkill: (skillId: string) => Promise<void>;
 }) {
+  const agentSupportsWrite = Boolean(agent?.executionProfile && agent.executionProfile !== "READ_ONLY");
   const [tab, setTab] = useState<TabKey>("config");
   const [status, setStatus] = useState("");
   const [modal, setModal] = useState<ModalType | null>(null);
@@ -159,7 +160,7 @@ export function InspectorPanel({ // NOSONAR
       visibility: newTool.teamId ? "private" : "shared",
       teamId: newTool.teamId || null,
     });
-      await onAssignTool(created.tool.id, true, newTool.policy === "write" && agent.type === "TICKET");
+      await onAssignTool(created.tool.id, true, newTool.policy === "write" && agentSupportsWrite);
       setStatus("Nova tool criada e vinculada.");
       setModal(null);
       setNewTool((prev) => ({ ...prev, name: "" }));
@@ -499,7 +500,7 @@ export function InspectorPanel({ // NOSONAR
         {tab === "permissions" ? (
           <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-xs text-slate-300">
             <div className="text-xs uppercase tracking-wider text-slate-400">SoD Snapshot</div>
-            <div>Role expected: {agent.type === "TICKET" ? "Write-capable" : "Read-only"}</div>
+            <div>Role expected: {agentSupportsWrite ? "Write-capable" : "Read-only"}</div>
             <div>Global scope: {agent.isGlobal ? "Yes" : "No"}</div>
             <div>Write tools assigned: {(agent.toolLinks || []).filter((link) => link.canWrite).length}</div>
             <div className="rounded-md border border-slate-700 bg-slate-800/70 p-2 text-[11px] text-slate-400">

@@ -20,7 +20,22 @@ type AgnoSimulateInput = {
   suggestedTeamId?: string;
   contextTags?: string[];
   teams: Array<{ id: string; key: string; name: string; description: string | null }>;
-  agents: Array<{ id: string; name: string; type: string; description: string; prompt: string; tags: unknown; isGlobal: boolean; visibility: string; teamId: string | null }>;
+  agents: Array<{
+    id: string;
+    name: string;
+    type: string;
+    persona?: string | null;
+    routingRole?: string | null;
+    executionProfile?: string | null;
+    capabilities?: unknown;
+    domains?: unknown;
+    description: string;
+    prompt: string;
+    tags: unknown;
+    isGlobal: boolean;
+    visibility: string;
+    teamId: string | null;
+  }>;
   handoffs: Array<{ fromAgentId: string; toAgentId: string }>;
   rules: Array<{ ownerTeamId: string | null; targetAgentId: string; fallbackAgentId: string | null; keywords: unknown; tags: unknown }>;
   advanced?: AgnoAdvancedOptions;
@@ -42,6 +57,11 @@ type AgnoChatInput = {
     id: string;
     name: string;
     type: string;
+    persona?: string | null;
+    routingRole?: string | null;
+    executionProfile?: string | null;
+    capabilities?: unknown;
+    domains?: unknown;
     description: string;
     prompt: string;
     tags: unknown;
@@ -113,6 +133,20 @@ export type AgnoCatalogResult = {
       linkedAgentNames?: string[];
     }
   >;
+  workflows: Array<
+    AgnoCatalogItem & {
+      objective: string;
+      preconditions: string[];
+      integrationKeys: string[];
+      steps: string[];
+      successCriteria: string[];
+      outputFormat: string;
+      failureHandling: string[];
+      setupPoints: string[];
+      enabled: boolean;
+      linkedAgentNames?: string[];
+    }
+  >;
   knowledgeSources: Array<
     AgnoCatalogItem & {
       url: string;
@@ -136,6 +170,17 @@ export type AgnoChatResult = {
   reply: string;
   reasoningSummary?: string[];
   meta?: Record<string, unknown>;
+};
+
+export type AgnoWorkflowSetupCheckResult = {
+  integrations: Array<{
+    key: string;
+    label: string;
+    configured: boolean;
+    available: boolean;
+    missingFields: string[];
+  }>;
+  summary: string;
 };
 
 export type AgnoCallResult<T> = {
@@ -234,4 +279,12 @@ export async function callAgnoCatalog(baseUrl: string, correlationId?: string): 
 
 export async function callAgnoModels(baseUrl: string, correlationId?: string): Promise<AgnoCallResult<AgnoModelsResult>> {
   return getJson<AgnoModelsResult>(baseUrl, "/models", AGNO_TIMEOUT_MS, correlationId);
+}
+
+export async function callAgnoWorkflowSetupCheck(
+  baseUrl: string,
+  payload: { integrationKeys: string[] },
+  correlationId?: string,
+): Promise<AgnoCallResult<AgnoWorkflowSetupCheckResult>> {
+  return postJson<AgnoWorkflowSetupCheckResult>(baseUrl, "/workflow/setup-check", payload, AGNO_TIMEOUT_MS, correlationId);
 }

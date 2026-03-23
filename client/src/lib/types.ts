@@ -32,6 +32,11 @@ export type Agent = {
   runtimeConfig?: unknown;
   tags: string[];
   type: "SUPERVISOR" | "SPECIALIST" | "TICKET";
+  persona?: "SUPERVISOR" | "SPECIALIST" | "ANALYST" | "EXECUTOR";
+  routingRole?: "ENTRYPOINT" | "DISPATCHER" | "SPECIALIST" | "TERMINAL" | "FALLBACK";
+  executionProfile?: "READ_ONLY" | "WRITE_GUARDED" | "WRITE_ALLOWED" | "APPROVAL_REQUIRED";
+  capabilities?: string[];
+  domains?: string[];
   isGlobal: boolean;
   visibility: "private" | "shared";
   userCustomized?: boolean;
@@ -65,6 +70,29 @@ export type Skill = {
   customizationNote?: string | null;
   customizationUpdatedAt?: string | null;
   linkedAgentIds?: string[];
+};
+
+export type Workflow = {
+  id: string;
+  name: string;
+  description: string;
+  objective: string;
+  preconditions: string[];
+  integrationKeys: string[];
+  participantAgentIds: string[];
+  steps: string[];
+  successCriteria: string[];
+  outputFormat: string;
+  failureHandling: string[];
+  setupPoints: string[];
+  enabled: boolean;
+  visibility: "private" | "shared";
+  managedBy: "portal" | "agno";
+  runtimeSource?: string | null;
+  userCustomized?: boolean;
+  customizationNote?: string | null;
+  customizationUpdatedAt?: string | null;
+  ownerTeamId: string | null;
 };
 
 export type AgentSkillLink = {

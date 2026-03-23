@@ -1,4 +1,5 @@
-﻿import type { Agent, Handoff, RoutingRule, Team } from "@prisma/client";
+import type { Agent, Handoff, RoutingRule, Team } from "@prisma/client";
+import { isSpecialistAgent, isSupervisorAgent, isTicketingAgent } from "./agent-classification.js";
 
 type SimInput = {
   message: string;
@@ -120,20 +121,19 @@ export function runSimulation(input: SimInput): SimulationResult { // NOSONAR
       };
     })
     .sort((a, b) => b.score - a.score);
-  const specialistRank = enrichedAgentRank.filter((item) => item.agent.type === "SPECIALIST");
+  const specialistRank = enrichedAgentRank.filter((item) => isSpecialistAgent(item.agent));
   const hasSignal = (teamScoresWithRules[0]?.score || 0) > 0 || (enrichedAgentRank[0]?.score || 0) > 0;
   let rankedTop = forcedAgent ? enrichedAgentRank.find((item) => item.agent.id === forcedAgent.id) || enrichedAgentRank[0] : enrichedAgentRank[0];
 
-  // Avoid defaulting to global supervisor when there is no signal or tie.
-  if (!forcedAgent && (!hasSignal || rankedTop?.agent.type === "SUPERVISOR") && specialistRank.length) {
+  if (!forcedAgent && (!hasSignal || (rankedTop?.agent && isSupervisorAgent(rankedTop.agent))) && specialistRank.length) {
     const bestSpecialist = specialistRank[0];
     if (!rankedTop || bestSpecialist.score >= rankedTop.score) rankedTop = bestSpecialist;
   }
   const rankedTopAgent = rankedTop?.agent;
 
   if (rankedTopAgent) {
-    const supervisor = teamAgents.find((a) => a.type === "SUPERVISOR");
-    const ticket = input.agents.find((a) => a.type === "TICKET");
+    const supervisor = teamAgents.find((a) => isSupervisorAgent(a));
+    const ticket = input.agents.find((a) => isTicketingAgent(a));
     if (!forcedAgent && supervisor && supervisor.id !== rankedTopAgent.id) path.push(supervisor.name);
     path.push(rankedTopAgent.name);
     if (ticket) {

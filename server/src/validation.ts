@@ -38,6 +38,11 @@ export const agentSchema = z.object({
   runtimeConfig: z.any().optional().nullable(),
   tags: z.array(z.string()).default([]),
   type: z.enum(["SUPERVISOR", "SPECIALIST", "TICKET"]),
+  persona: z.enum(["SUPERVISOR", "SPECIALIST", "ANALYST", "EXECUTOR"]).optional(),
+  routingRole: z.enum(["ENTRYPOINT", "DISPATCHER", "SPECIALIST", "TERMINAL", "FALLBACK"]).optional(),
+  executionProfile: z.enum(["READ_ONLY", "WRITE_GUARDED", "WRITE_ALLOWED", "APPROVAL_REQUIRED"]).optional(),
+  capabilities: z.array(z.string()).default([]),
+  domains: z.array(z.string()).default([]),
   isGlobal: z.boolean().default(false),
   visibility: z.enum(["private", "shared"]).default("private"),
   teamId: z.string().nullable().optional(),
@@ -101,6 +106,23 @@ export const skillSchema = z.object({
   visibility: z.enum(["private", "shared"]).default("private"),
   ownerTeamId: z.string().nullable().optional(),
   linkedAgentIds: z.array(z.string()).default([]),
+});
+
+export const workflowSchema = z.object({
+  name: z.string().min(2),
+  description: z.string().min(2),
+  objective: z.string().min(2),
+  preconditions: z.array(z.string()).default([]),
+  integrationKeys: z.array(z.string()).default([]),
+  participantAgentIds: z.array(z.string()).default([]),
+  steps: z.array(z.string()).default([]),
+  successCriteria: z.array(z.string()).default([]),
+  outputFormat: z.string().min(2),
+  failureHandling: z.array(z.string()).default([]),
+  setupPoints: z.array(z.string()).default([]),
+  enabled: z.boolean().default(true),
+  visibility: z.enum(["private", "shared"]).default("private"),
+  ownerTeamId: z.string().nullable().optional(),
 });
 
 export const handoffSchema = z.object({

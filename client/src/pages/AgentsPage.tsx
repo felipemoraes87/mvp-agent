@@ -104,6 +104,7 @@ export function AgentsPage() { // NOSONAR
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [catalogSearch, setCatalogSearch] = useState("");
   const [tab, setTab] = useState<AgentTab>("summary");
   const [agents, setAgents] = useState<AgentWithLinks[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -153,6 +154,26 @@ export function AgentsPage() { // NOSONAR
   }, []);
 
   const selected = useMemo(() => agents.find((agent) => agent.id === selectedAgentId) || null, [agents, selectedAgentId]);
+  const filteredAgents = useMemo(() => {
+    const query = catalogSearch.trim().toLowerCase();
+    if (!query) return agents;
+    return agents.filter((agent) => {
+      const teamKey = agent.isGlobal ? "global" : teams.find((team) => team.id === agent.teamId)?.key || "";
+      const haystack = [
+        agent.name,
+        agent.description,
+        agent.type,
+        agent.visibility,
+        teamKey,
+        ...(agent.tags || []),
+        ...(agent.capabilities || []),
+        ...(agent.domains || []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [agents, catalogSearch, teams]);
 
   useEffect(() => {
     if (!selected) {
@@ -268,11 +289,12 @@ export function AgentsPage() { // NOSONAR
     if (!selected || !selectedToolId) return;
     const tool = tools.find((item) => item.id === selectedToolId);
     if (!tool) return;
+    const supportsWrite = Boolean(selected.executionProfile && selected.executionProfile !== "READ_ONLY");
     try {
       await apiPost(`/api/agents/${selected.id}/tools`, {
         toolId: selectedToolId,
         canRead: true,
-        canWrite: tool.policy === "write" && selected.type === "TICKET",
+        canWrite: tool.policy === "write" && supportsWrite,
         justification: "Assigned from simplified agents page",
       });
       setSelectedToolId("");
@@ -346,10 +368,19 @@ export function AgentsPage() { // NOSONAR
 
       <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
         <div className="panel p-4">
-          <div className="mb-3 text-sm font-semibold text-slate-100">Catalogo</div>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold text-slate-100">Catalogo</div>
+            <div className="text-[11px] text-slate-400">{filteredAgents.length}/{agents.length}</div>
+          </div>
+          <input
+            className="input-dark mb-3"
+            placeholder="Buscar por nome, tag, time, dominio..."
+            value={catalogSearch}
+            onChange={(e) => setCatalogSearch(e.target.value)}
+          />
           {loading ? <div className="text-xs text-slate-400">Carregando...</div> : null}
           <div className="space-y-2">
-            {agents.map((agent) => (
+            {filteredAgents.map((agent) => (
               <button
                 key={agent.id}
                 className={`w-full rounded-lg border px-3 py-3 text-left transition ${selectedAgentId === agent.id ? "border-rose-400 bg-rose-500/10" : "border-slate-700 bg-slate-900/35"}`}
@@ -366,6 +397,7 @@ export function AgentsPage() { // NOSONAR
               </button>
             ))}
             {!agents.length ? <div className="text-xs text-slate-400">Nenhum agente cadastrado.</div> : null}
+            {agents.length > 0 && !filteredAgents.length ? <div className="text-xs text-slate-400">Nenhum agente encontrado para esse filtro.</div> : null}
           </div>
         </div>
 
