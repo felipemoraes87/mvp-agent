@@ -25,6 +25,10 @@ from falcon_mcp_tool import (
     resolve_allowed_falcon_tool_names,
     serialize_falcon_tool_result,
 )
+from iam_team import handle_iam_team_request, maybe_build_integration_setup_prompt, maybe_build_unavailable_integration_prompt
+from iam_team.change_guard import evaluate_change_safety
+from iam_team.coordinator import build_iam_team_catalog
+from iam_team.integration_registry import IntegrationConfigRegistry
 from jumpcloud_tool import JumpCloudToolError, build_jumpcloud_tool_from_env
 from secret_env import read_env_value
 
@@ -61,6 +65,11 @@ class AgentItem(BaseModel):
     id: str
     name: str
     type: str
+    persona: str | None = None
+    routingRole: str | None = None
+    executionProfile: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
     description: str
     prompt: str
     tags: Any = None
@@ -96,6 +105,11 @@ class ChatAgent(BaseModel):
     id: str
     name: str
     type: str
+    persona: str | None = None
+    routingRole: str | None = None
+    executionProfile: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
     description: str
     prompt: str
     tags: Any = None
@@ -129,16 +143,105 @@ class JumpCloudExecuteRequest(BaseModel):
     allowWrite: bool = False
 
 
+class WorkflowSetupCheckRequest(BaseModel):
+    integrationKeys: list[str] = Field(default_factory=list)
+
+
 def fallback_reasoning_summary(agent_type: str, message: str) -> list[str]:
+    return fallback_reasoning_summary_for_profile(agent_type=agent_type, persona=None, routing_role=None, execution_profile=None, message=message)
+
+
+def normalize_agent_persona(agent_type: str, persona: str | None) -> str:
+    normalized = str(persona or "").strip().upper()
+    if normalized in {"SUPERVISOR", "SPECIALIST", "ANALYST", "EXECUTOR"}:
+        return normalized
+    if agent_type == "SUPERVISOR":
+        return "SUPERVISOR"
+    if agent_type == "TICKET":
+        return "EXECUTOR"
+    return "SPECIALIST"
+
+
+def normalize_routing_role(agent_type: str, routing_role: str | None) -> str:
+    normalized = str(routing_role or "").strip().upper()
+    if normalized in {"ENTRYPOINT", "DISPATCHER", "SPECIALIST", "TERMINAL", "FALLBACK"}:
+        return normalized
+    if agent_type == "SUPERVISOR":
+        return "ENTRYPOINT"
+    if agent_type == "TICKET":
+        return "TERMINAL"
+    return "SPECIALIST"
+
+
+def normalize_execution_profile(agent_type: str, execution_profile: str | None) -> str:
+    normalized = str(execution_profile or "").strip().upper()
+    if normalized in {"READ_ONLY", "WRITE_GUARDED", "WRITE_ALLOWED", "APPROVAL_REQUIRED"}:
+        return normalized
+    if agent_type == "TICKET":
+        return "WRITE_GUARDED"
+    return "READ_ONLY"
+
+
+def normalize_str_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [str(item).strip().lower() for item in values if str(item).strip()]
+
+
+def normalize_agent_capabilities(
+    agent_type: str,
+    persona: str | None,
+    routing_role: str | None,
+    execution_profile: str | None,
+    capabilities: Any,
+    domains: Any,
+) -> list[str]:
+    explicit = normalize_str_list(capabilities)
+    if explicit:
+        return explicit
+
+    inferred: set[str] = set()
+    resolved_persona = normalize_agent_persona(agent_type, persona)
+    resolved_role = normalize_routing_role(agent_type, routing_role)
+    resolved_execution = normalize_execution_profile(agent_type, execution_profile)
+    resolved_domains = normalize_str_list(domains)
+    if resolved_role in {"ENTRYPOINT", "DISPATCHER"}:
+        inferred.add("can_route")
+    if resolved_role != "TERMINAL":
+        inferred.add("can_handoff")
+    if resolved_persona in {"SUPERVISOR", "SPECIALIST", "ANALYST"}:
+        inferred.add("can_query_knowledge")
+    if resolved_execution != "READ_ONLY":
+        inferred.add("can_call_write_tools")
+    if resolved_execution in {"WRITE_GUARDED", "WRITE_ALLOWED"}:
+        inferred.add("can_open_ticket")
+    if "falcon" in resolved_domains or "crowdstrike" in resolved_domains:
+        inferred.add("can_use_falcon_mcp")
+    if "jumpcloud" in resolved_domains:
+        inferred.add("can_use_jumpcloud")
+    return sorted(inferred)
+
+
+def fallback_reasoning_summary_for_profile(
+    *,
+    agent_type: str,
+    persona: str | None,
+    routing_role: str | None,
+    execution_profile: str | None,
+    message: str,
+) -> list[str]:
     tokens = normalize_tokens(message)
     key_terms = ", ".join(tokens[:4]) if tokens else "sem palavras-chave fortes"
-    if agent_type == "SUPERVISOR":
+    resolved_persona = normalize_agent_persona(agent_type, persona)
+    resolved_role = normalize_routing_role(agent_type, routing_role)
+    resolved_execution = normalize_execution_profile(agent_type, execution_profile)
+    if resolved_persona == "SUPERVISOR" or resolved_role == "ENTRYPOINT":
         return [
             "Classificacao inicial da demanda por contexto e risco.",
             f"Sinais principais: {key_terms}.",
             "Definicao do melhor especialista para encaminhamento.",
         ]
-    if agent_type == "TICKET":
+    if resolved_role == "TERMINAL" or resolved_execution != "READ_ONLY":
         return [
             "Validacao de pre-condicoes para acao de escrita.",
             f"Dados relevantes identificados: {key_terms}.",
@@ -152,12 +255,26 @@ def fallback_reasoning_summary(agent_type: str, message: str) -> list[str]:
 
 
 def fallback_chat_reply(agent_type: str, message: str) -> str:
-    if agent_type == "SUPERVISOR":
+    return fallback_chat_reply_for_profile(agent_type=agent_type, persona=None, routing_role=None, execution_profile=None, message=message)
+
+
+def fallback_chat_reply_for_profile(
+    *,
+    agent_type: str,
+    persona: str | None,
+    routing_role: str | None,
+    execution_profile: str | None,
+    message: str,
+) -> str:
+    resolved_persona = normalize_agent_persona(agent_type, persona)
+    resolved_role = normalize_routing_role(agent_type, routing_role)
+    resolved_execution = normalize_execution_profile(agent_type, execution_profile)
+    if resolved_persona == "SUPERVISOR" or resolved_role == "ENTRYPOINT":
         return (
             "Posso te ajudar com isso. Para confirmar se entendi corretamente, "
             "voce poderia detalhar objetivo, impacto e urgencia?"
         )
-    if agent_type == "TICKET":
+    if resolved_role == "TERMINAL" or resolved_execution != "READ_ONLY":
         return (
             "Posso seguir com orientacao de chamado, mas preciso validar dados obrigatorios "
             "(justificativa, impacto, evidencias e sistema afetado)."
@@ -169,7 +286,20 @@ def fallback_chat_reply(agent_type: str, message: str) -> str:
 
 
 def behavior_instructions(agent_type: str) -> list[str]:
-    if agent_type == "SUPERVISOR":
+    return behavior_instructions_for_profile(agent_type=agent_type, persona=None, routing_role=None, execution_profile=None)
+
+
+def behavior_instructions_for_profile(
+    *,
+    agent_type: str,
+    persona: str | None,
+    routing_role: str | None,
+    execution_profile: str | None,
+) -> list[str]:
+    resolved_persona = normalize_agent_persona(agent_type, persona)
+    resolved_role = normalize_routing_role(agent_type, routing_role)
+    resolved_execution = normalize_execution_profile(agent_type, execution_profile)
+    if resolved_persona == "SUPERVISOR" or resolved_role == "ENTRYPOINT":
         return [
             "You are the single point of contact for end users (global supervisor).",
             "Use a kind, collaborative and simple tone. Avoid excessive formality.",
@@ -177,7 +307,7 @@ def behavior_instructions(agent_type: str) -> list[str]:
             "If routing is needed, explain why and mention the responsible team clearly (example: @IAM/IGA).",
             "Do not claim ticket creation was completed unless confirmed by process and required data.",
         ]
-    if agent_type == "SPECIALIST":
+    if resolved_persona in {"SPECIALIST", "ANALYST"} or resolved_role == "SPECIALIST":
         return [
             "Your objective is to help the end user with practical and domain-specific guidance.",
             "If required information is missing, ask focused questions that the supervisor can relay to the user.",
@@ -186,7 +316,7 @@ def behavior_instructions(agent_type: str) -> list[str]:
             "If the case is documented for ticketing, follow documentation guidance, but request missing required fields before proceeding.",
             "If JumpCloud data/actions are required, use available JumpCloud tools for factual checks before answering.",
         ]
-    if agent_type == "TICKET":
+    if resolved_role == "TERMINAL" or resolved_execution != "READ_ONLY":
         return [
             "You are responsible for documented ticket preparation and write-action workflow.",
             "Before proposing ticket creation, verify mandatory details and ask for missing information.",
@@ -907,12 +1037,79 @@ def get_correlation_id(request: Request | None) -> str:
     return request.headers.get("x-correlation-id", "none")
 
 
+def format_runtime_response(reply: str, reasoning_summary: list[str] | None = None) -> str:
+    return json.dumps(
+        {
+            "reply": reply,
+            "reasoning_summary": reasoning_summary or ["Execution plan prepared.", "Awaiting the next safe step."],
+        },
+        ensure_ascii=True,
+    )
+
+
+def format_iam_team_reply(response: Any) -> str:
+    lines = [
+        f"Resumo: {response.summary}",
+        f"Modo: {response.workflow_mode}",
+    ]
+    if response.workflow_name:
+        lines.append(f"Workflow: {response.workflow_name}")
+    if response.participating_agents:
+        lines.append(f"Agentes: {', '.join(response.participating_agents)}")
+    if response.missing_configuration:
+        next_missing = response.missing_configuration[0]
+        lines.extend(
+            [
+                "",
+                "Configuracao pendente:",
+                f"- Integracao: {next_missing.integration_label}",
+                f"- Campo: {next_missing.field_label}",
+                f"- Motivo: {next_missing.description}",
+            ]
+        )
+    if response.next_steps:
+        lines.extend(["", "Proximos passos:"] + [f"- {step}" for step in response.next_steps[:4]])
+    if getattr(response, "entitlement_assessment", None) is not None:
+        lines.extend(
+            [
+                "",
+                "Entitlement reasoning:",
+                f"- Classificacao: {response.entitlement_assessment.classification}",
+                f"- Resumo: {response.entitlement_assessment.summary}",
+            ]
+        )
+    if getattr(response, "risk_assessment", None) is not None:
+        lines.extend(
+            [
+                "",
+                "Risk assessment:",
+                f"- Severidade: {response.risk_assessment.overall_severity}",
+                f"- Resumo: {response.risk_assessment.summary}",
+            ]
+        )
+    if getattr(response, "guarded_action_plan", None) is not None and response.guarded_action_plan.decision.decision != "read_only":
+        lines.extend(
+            [
+                "",
+                "Change guard:",
+                f"- Decisao: {response.guarded_action_plan.decision.decision}",
+                f"- Risco: {response.guarded_action_plan.decision.risk_summary}",
+            ]
+        )
+    return "\n".join(lines)
+
+
 async def run_agent_with_optional_mcp(
     *,
     name: str,
     description: str,
     prompt_text: str,
     agent_type: str,
+    persona: str | None,
+    routing_role: str | None,
+    execution_profile: str | None,
+    capabilities: Any,
+    domains: Any,
     tags: Any,
     team_key: str | None,
     linked_tools: list[dict[str, Any]],
@@ -925,28 +1122,112 @@ async def run_agent_with_optional_mcp(
     json_response: bool,
     correlation_id: str = "none",
 ) -> str:
+    resolved_persona = normalize_agent_persona(agent_type, persona)
+    resolved_routing_role = normalize_routing_role(agent_type, routing_role)
+    resolved_execution_profile = normalize_execution_profile(agent_type, execution_profile)
+    resolved_capabilities = normalize_agent_capabilities(agent_type, persona, routing_role, execution_profile, capabilities, domains)
+    resolved_domains = sorted(set(normalize_str_list(domains) or normalize_tag_values(tags)))
+    runtime_config_dict = runtime_config if isinstance(runtime_config, dict) else {}
+    iam_team_response = handle_iam_team_request(
+        agent_name=name,
+        runtime_config=runtime_config_dict,
+        message=message,
+        linked_knowledge=linked_knowledge,
+    )
+    if iam_team_response is not None:
+        return format_runtime_response(
+            format_iam_team_reply(iam_team_response),
+            [
+                f"intent: {iam_team_response.request_type}",
+                f"mode: {iam_team_response.workflow_mode}",
+                f"participants: {len(iam_team_response.participating_agents)}",
+            ],
+        )
+    required_integrations = []
+    iam_team_profile = runtime_config_dict.get("iamTeamProfile") if isinstance(runtime_config_dict, dict) else None
+    if isinstance(iam_team_profile, dict):
+        required_integrations.extend(
+            [
+                str(item).strip().lower()
+                for item in (iam_team_profile.get("requiredIntegrations") or [])
+                if str(item).strip()
+            ]
+        )
+    required_integrations.extend(
+        [
+            str(item).strip().lower()
+            for item in (runtime_config_dict.get("requiredIntegrations") or [])
+            if str(item).strip()
+        ]
+    )
+    if required_integrations:
+        deduped_required_integrations = list(dict.fromkeys(required_integrations))
+        unavailable_prompt = maybe_build_unavailable_integration_prompt(
+            integration_keys=deduped_required_integrations,
+            registry=IntegrationConfigRegistry(),
+        )
+        if unavailable_prompt:
+            return format_runtime_response(
+                unavailable_prompt,
+                ["connector unavailable", f"integrations: {', '.join(deduped_required_integrations)}"],
+            )
+        setup_prompt = maybe_build_integration_setup_prompt(
+            integration_keys=deduped_required_integrations,
+            runtime_config=runtime_config_dict,
+            registry=IntegrationConfigRegistry(),
+        )
+        if setup_prompt:
+            return format_runtime_response(
+                setup_prompt,
+                ["configuration missing", f"integrations: {', '.join(deduped_required_integrations)}"],
+            )
+    if resolved_execution_profile != "READ_ONLY":
+        guard_plan = evaluate_change_safety(message=message, requires_write=True)
+        if guard_plan.decision.decision in {"propose_only", "approval_required"}:
+            return format_runtime_response(
+                (
+                    "A acao solicitada cai em guardrail de mudanca.\n"
+                    f"Decisao: {guard_plan.decision.decision}.\n"
+                    f"Risco: {guard_plan.decision.risk_summary}\n"
+                    "Siga com proposta auditavel e aprovacao humana antes de qualquer escrita."
+                ),
+                ["change guard", *guard_plan.audit_notes[:2]],
+            )
     logger.info(
         "agent_runtime_start",
         extra={
             "correlation_id": correlation_id,
             "agent_name": name,
             "agent_type": agent_type,
-            "falcon_enabled": agent_should_use_falcon_mcp(
+            "agent_persona": resolved_persona,
+            "agent_routing_role": resolved_routing_role,
+            "agent_execution_profile": resolved_execution_profile,
+            "falcon_enabled": ("can_use_falcon_mcp" in resolved_capabilities) or agent_should_use_falcon_mcp(
                 agent_name=name,
                 agent_description=description,
                 agent_prompt=prompt_text,
                 team_key=team_key,
-                tags=tags,
+                tags=list(set(normalize_tag_values(tags) + resolved_domains + resolved_capabilities)),
             ),
         },
     )
     instructions = [
         "You are a security agent in an IGA security orchestration system.",
         f"Agent type: {agent_type}",
+        f"Agent persona: {resolved_persona}",
+        f"Routing role: {resolved_routing_role}",
+        f"Execution profile: {resolved_execution_profile}",
         f"Agent description: {description}",
         f"Agent prompt: {prompt_text}",
         f"Team key: {team_key or 'GLOBAL'}",
-        *behavior_instructions(agent_type),
+        f"Capabilities: {', '.join(resolved_capabilities) if resolved_capabilities else 'none'}",
+        f"Domains: {', '.join(resolved_domains) if resolved_domains else 'none'}",
+        *behavior_instructions_for_profile(
+            agent_type=agent_type,
+            persona=resolved_persona,
+            routing_role=resolved_routing_role,
+            execution_profile=resolved_execution_profile,
+        ),
         "Be concise, practical and policy-aware. Never claim actions were executed if they were not.",
     ]
     if linked_tools:
@@ -981,15 +1262,17 @@ async def run_agent_with_optional_mcp(
                 "reasoning_summary must be high-level and concise, never hidden chain-of-thought.",
             ]
         )
-    falcon_enabled_for_agent = agent_should_use_falcon_mcp(
+    falcon_enabled_for_agent = ("can_use_falcon_mcp" in resolved_capabilities) or agent_should_use_falcon_mcp(
         agent_name=name,
         agent_description=description,
         agent_prompt=prompt_text,
         team_key=team_key,
-        tags=tags,
+        tags=list(set(normalize_tag_values(tags) + resolved_domains + resolved_capabilities)),
     )
     jumpcloud_runtime_planner = extract_agent_runtime_planner(runtime_config, "jumpcloud")
     jumpcloud_enabled_for_agent = bool(JUMPCLOUD_TOOL) and (
+        ("can_use_jumpcloud" in resolved_capabilities)
+        or
         jumpcloud_runtime_planner is not None
         or any(
             token in " ".join(
@@ -999,6 +1282,8 @@ async def run_agent_with_optional_mcp(
                     prompt_text.lower(),
                     (team_key or "").lower(),
                     " ".join(normalize_tag_values(tags)),
+                    " ".join(resolved_domains),
+                    " ".join(resolved_capabilities),
                 ]
             )
             for token in ["jumpcloud", "directory insights", "iam", "iga", "directory"]
@@ -1500,11 +1785,42 @@ def jumpcloud_execute(req: JumpCloudExecuteRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/workflow/setup-check")
+def workflow_setup_check(req: WorkflowSetupCheckRequest) -> dict[str, Any]:
+    registry = IntegrationConfigRegistry()
+    integrations: list[dict[str, Any]] = []
+    for integration_key in req.integrationKeys:
+        definition = registry.get(integration_key)
+        if definition is None:
+            continue
+        state = registry.evaluate_setup_state(integration_key)
+        integrations.append(
+            {
+                "key": definition.key,
+                "label": definition.label,
+                "configured": not state.missing_fields,
+                "available": integration_key == "jumpcloud",
+                "missingFields": [item.field_label for item in state.missing_fields],
+            }
+        )
+    configured_count = len([item for item in integrations if item["configured"]])
+    available_count = len([item for item in integrations if item["available"]])
+    return {
+        "integrations": integrations,
+        "summary": (
+            f"{configured_count}/{len(integrations)} configured, "
+            f"{available_count}/{len(integrations)} with runtime connector available."
+            if integrations
+            else "No integrations declared for this workflow."
+        ),
+    }
+
+
 @app.post("/simulate")
 async def simulate(req: SimulateRequest, request: Request) -> dict[str, Any]:
     correlation_id = get_correlation_id(request)
     teams = req.teams
-    specialists = [a for a in req.agents if a.type == "SPECIALIST"]
+    specialists = [a for a in req.agents if normalize_routing_role(a.type, a.routingRole) == "SPECIALIST" or normalize_agent_persona(a.type, a.persona) in {"SPECIALIST", "ANALYST"}]
     team_map = {t.id: t for t in teams}
 
     team_catalog = "\n".join([f"- {t.key}: {t.name} ({t.description or 'no description'})" for t in teams])
@@ -1572,6 +1888,11 @@ async def simulate(req: SimulateRequest, request: Request) -> dict[str, Any]:
             description=chosen_specialist.description,
             prompt_text=chosen_specialist.prompt,
             agent_type=chosen_specialist.type,
+            persona=chosen_specialist.persona,
+            routing_role=chosen_specialist.routingRole,
+            execution_profile=chosen_specialist.executionProfile,
+            capabilities=chosen_specialist.capabilities,
+            domains=chosen_specialist.domains,
             tags=chosen_specialist.tags,
             team_key=chosen_team.key if chosen_team else None,
             linked_tools=[],
@@ -1604,8 +1925,8 @@ async def simulate(req: SimulateRequest, request: Request) -> dict[str, Any]:
         confidence = 0.55 if chosen_specialist else 0.25
 
     path = []
-    supervisor = next((a for a in req.agents if a.type == "SUPERVISOR"), None)
-    ticket = next((a for a in req.agents if a.type == "TICKET"), None)
+    supervisor = next((a for a in req.agents if normalize_agent_persona(a.type, a.persona) == "SUPERVISOR" or normalize_routing_role(a.type, a.routingRole) == "ENTRYPOINT"), None)
+    ticket = next((a for a in req.agents if normalize_routing_role(a.type, a.routingRole) == "TERMINAL" or normalize_execution_profile(a.type, a.executionProfile) != "READ_ONLY"), None)
     if supervisor:
         path.append(supervisor.name)
     if chosen_specialist:
@@ -1653,6 +1974,11 @@ async def chat(req: ChatRequest, request: Request) -> dict[str, Any]:
                 description=req.agent.description,
                 prompt_text=req.agent.prompt,
                 agent_type=req.agent.type,
+                persona=req.agent.persona,
+                routing_role=req.agent.routingRole,
+                execution_profile=req.agent.executionProfile,
+                capabilities=req.agent.capabilities,
+                domains=req.agent.domains,
                 tags=req.agent.tags,
                 team_key=req.agent.teamKey,
                 linked_tools=req.agent.tools,
@@ -1688,9 +2014,21 @@ async def chat(req: ChatRequest, request: Request) -> dict[str, Any]:
     if not reply:
         reply = extract_reply_from_text(out) or out
     if not reply:
-        reply = fallback_chat_reply(req.agent.type, req.message)
+        reply = fallback_chat_reply_for_profile(
+            agent_type=req.agent.type,
+            persona=req.agent.persona,
+            routing_role=req.agent.routingRole,
+            execution_profile=req.agent.executionProfile,
+            message=req.message,
+        )
     raw_summary = parsed.get("reasoning_summary")
-    reasoning_summary = [str(x) for x in raw_summary] if isinstance(raw_summary, list) else fallback_reasoning_summary(req.agent.type, req.message)
+    reasoning_summary = [str(x) for x in raw_summary] if isinstance(raw_summary, list) else fallback_reasoning_summary_for_profile(
+        agent_type=req.agent.type,
+        persona=req.agent.persona,
+        routing_role=req.agent.routingRole,
+        execution_profile=req.agent.executionProfile,
+        message=req.message,
+    )
     return {
         "reply": reply,
         "reasoningSummary": reasoning_summary[:4],
@@ -1709,41 +2047,12 @@ def catalog(request: Request) -> dict[str, Any]:
     logger.info("catalog_request", extra={"correlation_id": get_correlation_id(request)})
     tools: list[dict[str, Any]] = []
     skills: list[dict[str, Any]] = []
+    workflows: list[dict[str, Any]] = []
     knowledge_sources: list[dict[str, Any]] = []
-
-    if FALCON_MCP_CONFIG.enabled:
-        tools.append(
-            {
-                "id": "agno-falcon-mcp-readonly",
-                "name": "Falcon MCP Read Only",
-                "description": "Runtime bridge for CrowdStrike Falcon investigations via MCPTools in read-only mode.",
-                "callName": "falcon_execute_read_only",
-                "type": "internal",
-                "policy": "read",
-                "transport": FALCON_MCP_CONFIG.transport,
-                "mode": "real",
-                "visibility": "shared",
-                "ownerTeamKey": "DNR",
-                "managedBy": "agno",
-                "runtimeSource": "falcon-mcp",
-            }
-        )
-        skills.append(
-            {
-                "id": "agno-falcon-edr-investigation",
-                "name": "Falcon EDR Investigation",
-                "description": "Investigacao, triagem e hunting em CrowdStrike Falcon com foco somente leitura.",
-                "prompt": "Atue como analista senior de EDR em modo somente leitura. Priorize incidentes ativos, deteccoes criticas, persistence, credential access, lateral movement e sinais de ransomware. Diferencie fato, inferencia, hipotese e recomendacao.",
-                "category": "analysis",
-                "enabled": True,
-                "runbookUrl": None,
-                "visibility": "shared",
-                "ownerTeamKey": "DNR",
-                "managedBy": "agno",
-                "runtimeSource": "falcon-mcp",
-                "linkedAgentNames": ["Falcon EDR Analyst"],
-            }
-        )
+    iam_team_catalog = build_iam_team_catalog()
+    tools.extend(iam_team_catalog.get("tools", []))
+    skills.extend(iam_team_catalog.get("skills", []))
+    workflows.extend(iam_team_catalog.get("workflows", []))
 
     if JUMPCLOUD_TOOL_FEATURE_ENABLED:
         tools.append(
@@ -1783,5 +2092,6 @@ def catalog(request: Request) -> dict[str, Any]:
     return {
         "tools": tools,
         "skills": skills,
+        "workflows": workflows,
         "knowledgeSources": knowledge_sources,
     }

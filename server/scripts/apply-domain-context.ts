@@ -82,6 +82,11 @@ async function main() {
             "Quando houver baixa confianca ou contexto incompleto, faca perguntas de esclarecimento e confirme entendimento antes de direcionar. " +
             "Ao encaminhar, explique motivo e mencione o time responsavel na conversa (ex.: @IAM/IGA). " +
             "Nao afirmar execucao de acoes de escrita sem confirmacao.",
+          persona: "SUPERVISOR",
+          routingRole: "ENTRYPOINT",
+          executionProfile: "READ_ONLY",
+          capabilities: ["can_route", "can_handoff", "can_query_knowledge"],
+          domains: ["global", "routing"],
         },
       });
     }
@@ -98,6 +103,11 @@ async function main() {
           prompt:
             "Siga orientacao de documentacao para abertura de chamado. Antes de abrir ticket, valide campos obrigatorios e policy checks. " +
             "Se faltarem informacoes, liste claramente o que falta e nao conclua abertura.",
+          persona: "EXECUTOR",
+          routingRole: "TERMINAL",
+          executionProfile: "WRITE_GUARDED",
+          capabilities: ["can_open_ticket", "can_call_write_tools"],
+          domains: ["global", "ticketing"],
         },
       });
     }
@@ -151,6 +161,11 @@ async function main() {
             "Quando necessario, encaminhe para o time/membro correto com mencao de time na conversa (ex.: @Time). " +
             "Se caso for de abertura de chamado documentada, siga o playbook e solicite informacoes obrigatorias antes de prosseguir.",
           description: `Especialista de dominio ${team.name}. ${ctx.summary}`,
+          persona: "SPECIALIST",
+          routingRole: "SPECIALIST",
+          executionProfile: "READ_ONLY",
+          capabilities: ["can_query_knowledge", "can_handoff"],
+          domains: [...new Set([team.key.toLowerCase(), ...ctx.tags])],
         },
       });
 
@@ -173,162 +188,6 @@ async function main() {
       }
     }
 
-    if (team.key === "DNR") {
-      const existingFalconAgent = await prisma.agent.findUnique({
-        where: { name_teamId: { name: "Falcon EDR Analyst", teamId: team.id } },
-      });
-      const falconAgent = existingFalconAgent?.userCustomized
-        ? (noteSkip("Agent", existingFalconAgent.name, existingFalconAgent.customizationNote), existingFalconAgent)
-        : await prisma.agent.upsert({
-            where: { name_teamId: { name: "Falcon EDR Analyst", teamId: team.id } },
-            update: {
-              tags: [...new Set(["dnr", "falcon", "edr", "crowdstrike", "hunting", "detection", "response", "vuln-context", "cve", ...ctx.tags])],
-              prompt:
-                "Atue como analista senior de EDR focado em CrowdStrike Falcon. Trabalhe apenas em modo leitura para investigacao, triagem, hunting e recomendacao. " +
-                "Considere como prioridades incidentes ativos, deteccoes criticas, persistence, privilege escalation, credential access, lateral movement, beaconing, cadeias pai/filho anomalas e sinais de ransomware. " +
-                "Use a base local de relatorios de vulnerabilidades para contextualizar exposicao, SLA e prioridade quando houver CVEs, advisories ou backlog de remediacao. " +
-                "Explique fatos observados, inferencias, hipoteses, lacunas e proximos passos de forma objetiva.",
-              description: "Analista senior de EDR focado em CrowdStrike Falcon para triagem, investigacao, hunting e correlacao com relatorios de vulnerabilidade.",
-              visibility: "private",
-              knowledgeMode: "hybrid",
-              knowledgeMaxResults: 6,
-              knowledgeAddReferences: true,
-              knowledgeContextFormat: "yaml",
-            },
-            create: {
-              name: "Falcon EDR Analyst",
-              description: "Analista senior de EDR focado em CrowdStrike Falcon para triagem, investigacao, hunting e correlacao com relatorios de vulnerabilidade.",
-              prompt:
-                "Atue como analista senior de EDR focado em CrowdStrike Falcon. Trabalhe apenas em modo leitura para investigacao, triagem, hunting e recomendacao. " +
-                "Considere como prioridades incidentes ativos, deteccoes criticas, persistence, privilege escalation, credential access, lateral movement, beaconing, cadeias pai/filho anomalas e sinais de ransomware. " +
-                "Use a base local de relatorios de vulnerabilidades para contextualizar exposicao, SLA e prioridade quando houver CVEs, advisories ou backlog de remediacao. " +
-                "Explique fatos observados, inferencias, hipoteses, lacunas e proximos passos de forma objetiva.",
-              tags: [...new Set(["dnr", "falcon", "edr", "crowdstrike", "hunting", "detection", "response", "vuln-context", "cve", ...ctx.tags])],
-              type: "SPECIALIST",
-              isGlobal: false,
-              visibility: "private",
-              teamId: team.id,
-              knowledgeMode: "hybrid",
-              knowledgeMaxResults: 6,
-              knowledgeAddReferences: true,
-              knowledgeContextFormat: "yaml",
-            },
-          });
-
-      const falconReportsPath = path.join(repoRoot, "docs", "falcon-rag", "vulnerability-reports");
-      const falconReportsUrl = `file:///${falconReportsPath.replace(/\\/g, "/").replace(/ /g, "%20")}`;
-      const falconVulnKnowledgeData = {
-        name: "Falcon Vulnerability Reports RAG",
-        url: falconReportsUrl,
-        tags: ["falcon", "edr", "vulnerability", "cve", "remediation", "report", "rag"],
-        sourceType: "folder" as const,
-        sourceConfig: {
-          include: ["**/*.md"],
-          description: "Simulated local RAG corpus for Falcon vulnerability report context.",
-        },
-        chunkSize: 1200,
-        chunkOverlap: 150,
-        chunkStrategy: "markdown" as const,
-        embeddingProvider: "simulated-local",
-        embeddingModel: "mock-text-embedding-001",
-        vectorStoreProvider: "local-simulated",
-        vectorStoreIndex: "falcon-vuln-reports",
-        retrievalMode: "hybrid" as const,
-        searchType: "hybrid" as const,
-        maxResults: 8,
-        rerankerProvider: "simulated-local",
-        rerankerModel: "mock-reranker-001",
-        metadataFilter: { domain: "falcon", corpus: "vulnerability-reports" },
-        contextFormat: "yaml" as const,
-        addContextInstructions: true,
-        addReferences: true,
-        visibility: "private",
-      };
-      const existingFalconVulnKnowledge = await prisma.knowledgeSource.findFirst({
-        where: { name: falconVulnKnowledgeData.name, ownerTeamId: team.id },
-      });
-      const falconVulnKnowledge = existingFalconVulnKnowledge
-        ? existingFalconVulnKnowledge.userCustomized
-          ? (noteSkip("Knowledge", existingFalconVulnKnowledge.name, existingFalconVulnKnowledge.customizationNote), existingFalconVulnKnowledge)
-          : await prisma.knowledgeSource.update({
-              where: { id: existingFalconVulnKnowledge.id },
-              data: falconVulnKnowledgeData,
-            })
-        : await prisma.knowledgeSource.create({
-            data: {
-              ...falconVulnKnowledgeData,
-              ownerTeamId: team.id,
-            },
-          });
-
-      if (supervisor?.userCustomized || falconAgent.userCustomized) {
-        skipped.push(`Handoff supervisor -> Falcon EDR Analyst preservado porque um dos agentes envolvidos esta protegido.`);
-      } else {
-        await prisma.handoff.upsert({
-          where: {
-            fromAgentId_toAgentId: {
-              fromAgentId: supervisor!.id,
-              toAgentId: falconAgent.id,
-            },
-          },
-          update: {
-            conditionExpr: "falcon edr crowdstrike hunting detections",
-            priority: 85,
-          },
-          create: {
-            fromAgentId: supervisor!.id,
-            toAgentId: falconAgent.id,
-            conditionExpr: "falcon edr crowdstrike hunting detections",
-            priority: 85,
-          },
-        });
-      }
-
-      if (ticketAgent) {
-        if (ticketAgent.userCustomized || falconAgent.userCustomized) {
-          skipped.push(`Handoff Falcon EDR Analyst -> Ticket Agent preservado porque um dos agentes envolvidos esta protegido.`);
-        } else {
-          await prisma.handoff.upsert({
-            where: {
-              fromAgentId_toAgentId: {
-                fromAgentId: falconAgent.id,
-                toAgentId: ticketAgent.id,
-              },
-            },
-            update: {
-              conditionExpr: "ticket required",
-              priority: 80,
-            },
-            create: {
-              fromAgentId: falconAgent.id,
-              toAgentId: ticketAgent.id,
-              conditionExpr: "ticket required",
-              priority: 80,
-            },
-          });
-        }
-      }
-
-      if (falconAgent.userCustomized || knowledge.userCustomized) {
-        skipped.push(`Link Falcon EDR Analyst -> ${knowledge.name} preservado porque agente ou knowledge esta protegido.`);
-      } else {
-        await prisma.agentKnowledge.upsert({
-          where: { agentId_knowledgeSourceId: { agentId: falconAgent.id, knowledgeSourceId: knowledge.id } },
-          update: {},
-          create: { agentId: falconAgent.id, knowledgeSourceId: knowledge.id },
-        });
-      }
-
-      if (falconAgent.userCustomized || falconVulnKnowledge.userCustomized) {
-        skipped.push(`Link Falcon EDR Analyst -> ${falconVulnKnowledge.name} preservado porque agente ou knowledge esta protegido.`);
-      } else {
-        await prisma.agentKnowledge.upsert({
-          where: { agentId_knowledgeSourceId: { agentId: falconAgent.id, knowledgeSourceId: falconVulnKnowledge.id } },
-          update: {},
-          create: { agentId: falconAgent.id, knowledgeSourceId: falconVulnKnowledge.id },
-        });
-      }
-    }
   }
 
   console.log(JSON.stringify({ ok: true, skipped }, null, 2));
