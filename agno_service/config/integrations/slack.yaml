@@ -1,0 +1,19 @@
+key: "slack"
+label: "Slack"
+description: "Contexto operacional recente em canais e discussoes."
+scopes:
+  - "channels:history"
+  - "search:read"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "bot_token"
+    label: "Bot Token"
+    description: "Token do bot do Slack para leitura de canais autorizados."
+    env_names: ["SLACK_BOT_TOKEN"]
+    secret: true
+  - key: "workspace"
+    label: "Workspace"
+    description: "Workspace ou dominio principal do Slack."
+    env_names: ["SLACK_WORKSPACE"]
+    example: "company.slack.com"

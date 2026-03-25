@@ -1,0 +1,18 @@
+key: "cloud_logging"
+label: "GCP Cloud Logging"
+description: "Logs operacionais e de seguranca no GCP para investigacoes IAM."
+scopes:
+  - "logging.read"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "project_id"
+    label: "Project ID"
+    description: "Projeto principal dos logs."
+    env_names: ["GOOGLE_CLOUD_PROJECT", "CLOUD_LOGGING_PROJECT_ID"]
+    example: "company-sec-prd"
+  - key: "credentials"
+    label: "Credentials JSON/Path"
+    description: "Credenciais para leitura de logs."
+    env_names: ["GOOGLE_APPLICATION_CREDENTIALS", "CLOUD_LOGGING_CREDENTIALS_JSON"]
+    secret: true

@@ -77,26 +77,56 @@ Mudancas relevantes:
 
 - Stack: Python + FastAPI + Agno
 - Porta default: `8010`
-- Arquivo principal: `agno_service/app.py`
+- Arquivo principal: `agno_service/app.py` (~961 linhas — orquestracao + endpoints)
+
+Estrutura modular (refatorada em 2026-03-24, Atlassian MCP adicionado em 2026-03-25):
+
+```
+agno_service/
+  app.py               # endpoints HTTP + run_agent_with_optional_mcp
+  models.py            # DTOs Pydantic de request/response
+  utils.py             # helpers puros: texto, JSON, score, formatadores
+  agent_profiles.py    # normalizacao de perfil + comportamento + fallbacks
+  model_factory.py     # factory LLM + discovery de providers (Ollama/OpenRouter/Vertex)
+  observability.py     # ring buffer de logs de agente
+  get_atlassian_token.py  # CLI para gerar access token OAuth 2.1 Atlassian
+  connectors/
+    jumpcloud.py          # tool JumpCloud
+    jumpcloud_skills.py   # planejamento JumpCloud + infer_jumpcloud_plan_with_skill
+    jumpcloud_mcp.py      # config e build MCP JumpCloud (StreamableHTTP)
+    falcon_mcp.py         # config e contexto MCP Falcon
+    falcon_skills.py      # intent detection + make_falcon_agent_tools
+    atlassian_mcp.py      # config e build MCP Atlassian (Jira/Confluence/Compass)
+    atlassian_skills.py   # intent detection Atlassian + domain inference
+  config/
+    agents/               # YAML por agente (jira_confluence_iam_agent.yaml, etc.)
+```
 
 Endpoints principais:
 
 - `GET /health`
 - `GET /catalog`
+- `GET /models`
+- `GET /agent-logs`
 - `POST /simulate`
 - `POST /chat`
+- `POST /jumpcloud/execute`
+- `POST /workflow/setup-check`
 
 IAM Team:
 
-- codigo em `agno_service/iam_team/`
+- codigo em `agno_service/team_engine/`
 - coordenador em `coordinator.py`
 - knowledge layer em `knowledge_layer.py`
 - entitlement reasoning em `entitlement_reasoning.py`
 - risk analysis em `risk_analysis.py`
 - change guard em `change_guard.py`
 - integration setup flow em `integration_registry.py`
-- workflows em `workflows.py`
+- workflows em `workflows.py` (carregados de `config/workflows.yaml`)
+- mapeamento de roles e triagem de tickets em `role_mapping.py`
 - investigation memory em `memory.py`
+- definicoes de agentes em `config/agents.yaml`
+- definicoes de workflows em `config/workflows.yaml`
 
 ### 2.4 Docker Compose
 
@@ -188,12 +218,30 @@ Agentes/camadas ativas:
 - `IAM Risk Analyst`
 - `Change Guard / Approval Agent`
 
+Definicao dos agentes:
+
+- as capacidades de cada agente (`AgentCapability`) eram hardcoded; agora sao carregadas de `config/agents.yaml`
+- o YAML define: `agent_name`, `role`, `summary`, `domains`, `can_write`, `reuse_existing_agent`
+
 Capacidades do coordenador:
 
 - decidir entre workflow conhecido e `open_investigation`
 - exigir setup sequencial de integracoes
 - consolidar evidencias e gaps
 - acionar knowledge, reasoning, risk e change guard
+- triar tickets Jira de acesso via `role_mapping.py` e mapear para business role no IGA
+
+Triagem de tickets Jira (`role_mapping.py`):
+
+- extrai contexto estruturado do ticket (`AccessRequestContext`): issue_key, system, target_user, request_type, justification
+- classifica o ticket: `fulfillable_access_request`, `unclear_request`, `not_access_request`
+- mapeia para business role usando tabela de regras (`DEFAULT_ROLE_MAPPING_RULES`) ou regras vindas de `linked_knowledge`
+- retorna `TicketTriageResult` com acao sugerida para Jira e IGA
+
+Schemas novos:
+
+- `AccessRequestContext`: contexto extraido de mensagens de solicitacao de acesso
+- `TicketTriageResult`: resultado da triagem de ticket Jira, com classificacao, business role e passos recomendados
 
 ## 6. Setup Sequencial de Integracoes
 
@@ -315,15 +363,23 @@ docker compose up -d --build client
 - verificar `DATABASE_URL`
 - reaplicar `npm run prisma:migrate`
 
-## 11. Checklist para Nova Sessao
+## 11. Historico de Sessoes
+
+| Data | Arquivo | Resumo |
+|---|---|---|
+| 2026-03-24 | [session-notes-2026-03-24-agno-refactor.md](docs/session-notes-2026-03-24-agno-refactor.md) | Refatoracao do agno_service/app.py: 1901 → 961 linhas, 7 modulos extraidos |
+| 2026-03-25 | [session-notes-2026-03-25-atlassian-mcp.md](docs/session-notes-2026-03-25-atlassian-mcp.md) | Integracao Atlassian MCP: connector, OAuth 2.1, 19 tools Jira/Confluence, agente read-only |
+
+## 12. Checklist para Nova Sessao
 
 Antes de mexer:
 
 1. ler `README.md`
 2. ler este arquivo
 3. ler `docs/iam-team-architecture.md` se o assunto for IAM Team
-4. verificar `git status`
-5. validar healthchecks
+4. ler notas da ultima sessao relevante em `docs/session-notes-*.md`
+5. verificar `git status`
+6. validar healthchecks
 
 Depois de mexer:
 
@@ -331,3 +387,4 @@ Depois de mexer:
 2. se mudou catalogo/runtime, validar `/catalog`
 3. se mudou UI, rebuild do `client`
 4. atualizar documentacao se fluxo mudou
+5. registrar notas da sessao em `docs/session-notes-YYYY-MM-DD-*.md` e linkar neste arquivo

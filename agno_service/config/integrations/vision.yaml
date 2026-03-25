@@ -1,0 +1,20 @@
+key: "vision"
+label: "Vision"
+description: "API, webhooks ou backend de governanca de identidades (Unico Vision)."
+scopes:
+  - "requests:read"
+  - "roles:read"
+  - "approvals:read"
+supports_write: true
+runtime_available: false
+credentials:
+  - key: "base_url"
+    label: "Base URL"
+    description: "Endpoint base do Vision ou gateway n8n."
+    env_names: ["VISION_BASE_URL", "VISION_WEBHOOK_BASE_URL"]
+    example: "https://vision.unico.io/api"
+  - key: "token"
+    label: "Token"
+    description: "Token ou chave para consultar o Vision."
+    env_names: ["VISION_API_TOKEN", "VISION_WEBHOOK_TOKEN"]
+    secret: true

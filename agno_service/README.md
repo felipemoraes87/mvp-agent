@@ -1,12 +1,11 @@
-# Agno Service (Local)
+# Agno Service
 
-Servico Python para orquestracao com Agno + LLM local (Ollama).
+Servico Python para orquestracao de agentes com Agno + LLM (Ollama, OpenRouter, Vertex AI).
 
 ## Requisitos
 
 - Python 3.11+
-- Ollama instalado e rodando
-- Modelo local recomendado: `qwen2.5:3b`
+- Ollama instalado e rodando (para provider local)
 
 ## Setup
 
@@ -17,42 +16,122 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Modelo local (Ollama)
-
-```bash
-ollama pull qwen2.5:3b
-```
-
-Opcional: definir outro modelo
-
-```bash
-set AGNO_OLLAMA_MODEL=llama3.1:8b
-```
-
-Opcional: definir host do Ollama (ex.: Docker network)
-
-```bash
-set AGNO_OLLAMA_HOST=http://localhost:11434
-```
-
 ## Run
 
 ```bash
 uvicorn app:app --host 0.0.0.0 --port 8010 --reload
 ```
 
+## Estrutura de modulos
+
+```
+agno_service/
+  app.py                  # endpoints HTTP + orquestracao de agente (~961 linhas)
+  models.py               # DTOs Pydantic (request/response)
+  utils.py                # helpers puros: texto, JSON, score, formatadores
+  agent_profiles.py       # normalizacao de perfil, comportamento e fallbacks
+  model_factory.py        # factory de modelo LLM + discovery de providers
+  observability.py        # ring buffer de logs de agente
+  secret_env.py           # leitura segura de variaveis de ambiente
+  connectors/
+    __init__.py
+    jumpcloud.py           # tool JumpCloud (API v1/v2/insights)
+    jumpcloud_skills.py    # planejamento JumpCloud + infer_jumpcloud_plan_with_skill
+    jumpcloud_mcp.py       # config e build do MCP JumpCloud (StreamableHTTP)
+    falcon_mcp.py          # config e build do contexto MCP Falcon
+    falcon_skills.py       # intent detection Falcon + make_falcon_agent_tools
+    atlassian_mcp.py       # config e build do MCP Atlassian (Jira/Confluence/Compass)
+    atlassian_skills.py    # intent detection Atlassian + infer_atlassian_domain
+  config/
+    agents/                # YAML de configuracao de agentes
+  team_engine/             # IAM Team: coordenacao, knowledge, risk, change guard
+  tests/
+```
+
+## Providers de LLM
+
+Configurados via variavel de ambiente `AGNO_MODEL_PROVIDER`:
+
+| Provider | Valor | Variaveis principais |
+|---|---|---|
+| Ollama (local) | `ollama` | `AGNO_OLLAMA_MODEL`, `AGNO_OLLAMA_HOST` |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY`, `AGNO_OPENROUTER_MODEL` |
+| Vertex AI | `vertexai` | `GOOGLE_CLOUD_PROJECT`, `AGNO_VERTEX_MODEL`, `VERTEX_AI_CREDENTIALS_PATH` |
+
+Exemplo Ollama:
+
+```bash
+set AGNO_MODEL_PROVIDER=ollama
+set AGNO_OLLAMA_MODEL=qwen2.5:3b
+set AGNO_OLLAMA_HOST=http://localhost:11434
+ollama pull qwen2.5:3b
+```
+
+Exemplo OpenRouter:
+
+```bash
+set AGNO_MODEL_PROVIDER=openrouter
+set OPENROUTER_API_KEY=sk-...
+set AGNO_OPENROUTER_MODEL=openai/gpt-4o-mini
+```
+
 ## Endpoints
 
-- `GET /health`
-- `POST /simulate`
-- `POST /chat`
-- `POST /jumpcloud/execute` (operacoes JumpCloud)
+| Metodo | Path | Descricao |
+|---|---|---|
+| `GET` | `/health` | Status do servico, provider e flags |
+| `GET` | `/models` | Catalogo de modelos por provider |
+| `GET` | `/catalog` | Catalogo de agentes para sync com o server |
+| `GET` | `/agent-logs` | Ring buffer de logs de execucao |
+| `POST` | `/chat` | Execucao de agente com historico e MCP |
+| `POST` | `/simulate` | Simulacao de agente sem historico |
+| `POST` | `/jumpcloud/execute` | Execucao direta de operacoes JumpCloud |
+| `POST` | `/workflow/setup-check` | Verificacao de setup de integracao |
+
+## Atlassian MCP (Jira / Confluence / Compass)
+
+O agno_service ativa consultas ao Atlassian para agentes com domain `jira`, `confluence`, `atlassian` ou `compass`, ou com capability `can_use_atlassian`.
+
+Autenticacao (escolha uma):
+
+```bash
+# Opcao A — OAuth 2.1 (recomendado)
+set ATLASSIAN_MCP_TOKEN=<access_token>
+
+# Opcao B — Basic auth (API Token)
+set ATLASSIAN_EMAIL=user@company.com
+set ATLASSIAN_API_TOKEN=<api_token>
+
+# Opcional — leitura de arquivo (Docker/secrets)
+set ATLASSIAN_MCP_TOKEN_FILE=/app/secrets/atlassian_mcp_token
+```
+
+Variaveis opcionais:
+
+```bash
+set ATLASSIAN_MCP_ALLOW_WRITE=false      # default: false (somente leitura)
+set ATLASSIAN_MCP_TIMEOUT_SECONDS=60    # default: 60
+set ATLASSIAN_MCP_URL=https://mcp.atlassian.com/v1/mcp  # default
+```
+
+Gerar token OAuth 2.1 (uma vez, requer browser):
+
+```bash
+python get_atlassian_token.py --client-id <ID> --client-secret <SECRET>
+```
+
+Tools disponiveis (read-only, 19 no total):
+- `searchJiraIssuesUsingJql`, `getJiraIssue`, `getVisibleJiraProjects`
+- `searchAtlassian`, `fetchAtlassian`, `atlassianUserInfo`
+- `getTransitionsForJiraIssue`, `getJiraIssueTypeMetaWithFields`, e outras
+
+Agente pre-configurado: `config/agents/jira_confluence_iam_agent.yaml`
 
 ## Falcon MCP (EDR Analyst)
 
-O servico Agno agora consegue ativar consultas read-only ao CrowdStrike Falcon para agentes com perfil/tags de EDR/Falcon, usando `MCPTools`.
+O agno_service ativa consultas read-only ao CrowdStrike Falcon para agentes com perfil/tags EDR/Falcon.
 
-Variaveis principais:
+Variaveis:
 
 ```bash
 set FALCON_MCP_ENABLED=true
@@ -63,83 +142,74 @@ set FALCON_CLIENT_SECRET=<client_secret>
 set FALCON_BASE_URL=https://api.us-2.crowdstrike.com
 ```
 
-Opcional para futuro MCP remoto:
+Modo remoto (SSE):
 
 ```bash
 set FALCON_MCP_TRANSPORT_MODE=sse
 set FALCON_MCP_URL=http://localhost:8080/sse
 ```
 
-Observacoes:
+Comportamento:
 
-- o perfil Falcon EDR opera em modo somente leitura
-- por padrao, o servico expoe apenas um subconjunto dinamico de tools read-only do Falcon, escolhido pela pergunta do usuario
-- para debug/diagnostico, e possivel expor todas as tools configurando `FALCON_MCP_INCLUDE_ALL_TOOLS=true`
+- operacoes sempre read-only
+- subconjunto dinamico de tools escolhido pela pergunta do usuario
+- `FALCON_MCP_INCLUDE_ALL_TOOLS=true` para expor todas as tools (debug)
 
-## JumpCloud Tool (completa)
-
-A tool JumpCloud foi adicionada no Agno com:
-
-- catalogo de operacoes (`v1`, `v2`, `insights`)
-- execucao por operacao nomeada
-- execucao raw (endpoint arbitrario)
-- consulta de logs (`Directory Insights`)
-- modo de seguranca para bloquear escrita por padrao
+## JumpCloud Tool
 
 Variaveis:
 
 ```bash
 set JUMPCLOUD_TOOL_ENABLED=true
-set JUMPCLOUD_API_KEY=<sua_api_key>
-set JUMPCLOUD_CLIENT_ID=<seu_client_id>
-set JUMPCLOUD_CLIENT_SECRET=<seu_client_secret>
+set JUMPCLOUD_API_KEY=<api_key>
+set JUMPCLOUD_CLIENT_ID=<client_id>
+set JUMPCLOUD_CLIENT_SECRET=<client_secret>
 set JUMPCLOUD_BASE_URL=https://console.jumpcloud.com
 set JUMPCLOUD_TIMEOUT_SECONDS=30
 set JUMPCLOUD_WRITE_ENABLED=false
 ```
 
-Autenticacao suportada:
+Autenticacao suportada: `x-api-key` ou `OAuth client_credentials`.
 
-- `x-api-key` tradicional com `JUMPCLOUD_API_KEY`
-- `OAuth client_credentials` com `JUMPCLOUD_CLIENT_ID` + `JUMPCLOUD_CLIENT_SECRET`
-- token endpoint padrao para OAuth: `https://admin-oauth.id.jumpcloud.com/oauth2/token`
-
-Exemplo (listar operacoes):
+Exemplos:
 
 ```bash
-curl -X POST http://localhost:8010/jumpcloud/execute ^
-  -H "Content-Type: application/json" ^
+# listar operacoes
+curl -X POST http://localhost:8010/jumpcloud/execute \
+  -H "Content-Type: application/json" \
   -d "{\"operation\":\"list_operations\"}"
-```
 
-Exemplo (users via operacao nomeada):
-
-```bash
-curl -X POST http://localhost:8010/jumpcloud/execute ^
-  -H "Content-Type: application/json" ^
+# listar usuarios
+curl -X POST http://localhost:8010/jumpcloud/execute \
+  -H "Content-Type: application/json" \
   -d "{\"operation\":\"list_users\",\"query\":{\"limit\":25}}"
-```
 
-Exemplo (Directory Insights):
-
-```bash
-curl -X POST http://localhost:8010/jumpcloud/execute ^
-  -H "Content-Type: application/json" ^
+# Directory Insights
+curl -X POST http://localhost:8010/jumpcloud/execute \
+  -H "Content-Type: application/json" \
   -d "{\"operation\":\"list_directory_events\",\"query\":{\"limit\":100}}"
 ```
 
-Exemplo (raw request):
+## Testes
 
 ```bash
-curl -X POST http://localhost:8010/jumpcloud/execute ^
-  -H "Content-Type: application/json" ^
-  -d "{\"apiFamily\":\"v2\",\"method\":\"GET\",\"path\":\"/users\",\"query\":{\"limit\":10}}"
+.\.venv\Scripts\python.exe -m unittest tests.test_iam_team tests.test_falcon_mcp_tool
 ```
 
 ## Docker
 
-Este servico pode ser executado pelo compose da raiz:
-
 ```bash
 docker compose up -d --build
+```
+
+## Verificacao rapida de imports
+
+```bash
+.\.venv\Scripts\python.exe -c "import app; print('app OK')"
+.\.venv\Scripts\python.exe -c "from models import ChatRequest; print('models OK')"
+.\.venv\Scripts\python.exe -c "from utils import parse_json_block; print('utils OK')"
+.\.venv\Scripts\python.exe -c "from agent_profiles import normalize_agent_persona; print('agent_profiles OK')"
+.\.venv\Scripts\python.exe -c "from model_factory import build_agent_instance; print('model_factory OK')"
+.\.venv\Scripts\python.exe -c "from observability import _emit_agent_log; print('observability OK')"
+.\.venv\Scripts\python.exe -c "from connectors import make_falcon_agent_tools; print('connectors OK')"
 ```

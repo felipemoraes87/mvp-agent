@@ -1,0 +1,29 @@
+name: "Documentation-Assisted Troubleshooting"
+team: "IAM_IGA"
+objective: "Usar documentacao e tickets para acelerar troubleshooting operacional de IAM."
+preconditions:
+  - "Descricao do problema e, quando possivel, sistema ou role afetada."
+integrations: ["jira", "confluence"]
+agents:
+  - "IAM Orchestrator"
+  - "IAM Knowledge Agent"
+  - "Jira/Confluence IAM Agent"
+steps:
+  - "Recuperar runbooks, processos, post-mortems e excecoes relevantes."
+  - "Consultar tickets e mudancas correlatas no Jira."
+  - "Trazer procedimento oficial e variacoes historicas que possam explicar o problema."
+  - "Consolidar orientacao de troubleshooting com referencias."
+success_criteria:
+  - "Procedimento oficial resumido com referencias."
+  - "Documentacao, ticket ou lacuna documental apontados claramente."
+output_format: "procedimento, referencias, lacunas, proximos passos"
+failure_handling:
+  - "Se nao houver documentacao confiavel, registrar explicitamente a lacuna."
+setup_points:
+  - "Pedir Jira/Confluence primeiro."
+match_keywords:
+  - "runbook"
+  - "documentacao"
+  - "procedimento"
+  - "troubleshooting"
+  - "como faz"

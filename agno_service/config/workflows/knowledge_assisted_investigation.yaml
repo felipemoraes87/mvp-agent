@@ -1,0 +1,27 @@
+name: "Knowledge-Assisted Investigation"
+team: "IAM_IGA"
+objective: "Usar a camada de conhecimento organizacional como apoio explicito de investigacao IAM."
+preconditions:
+  - "Pergunta operacional ou investigativa com necessidade de contexto."
+integrations: ["jira", "confluence"]
+agents:
+  - "IAM Orchestrator"
+  - "IAM Knowledge Agent"
+  - "Jira/Confluence IAM Agent"
+steps:
+  - "Buscar runbooks, glossario, post-mortems, tickets e contexto recente."
+  - "Resumir procedimento oficial e excecoes historicas."
+  - "Anexar evidencias documentais para suportar a investigacao principal."
+success_criteria:
+  - "Contexto documental relevante entregue com referencias."
+output_format: "resumo documental, evidencias, referencias, implicacoes para o caso"
+failure_handling:
+  - "Sem material relevante, declarar explicitamente a ausencia de contexto formal."
+setup_points:
+  - "Pedir Jira/Confluence primeiro."
+match_keywords:
+  - "use a documentacao"
+  - "procedimento correto"
+  - "contexto operacional"
+  - "knowledge"
+  - "conhecimento"

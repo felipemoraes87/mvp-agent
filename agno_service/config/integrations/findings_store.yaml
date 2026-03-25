@@ -1,0 +1,14 @@
+key: "findings_store"
+label: "Findings Store"
+description: "Armazenamento estruturado de findings e memoria investigativa."
+scopes:
+  - "findings:write"
+  - "findings:read"
+supports_write: true
+runtime_available: true
+credentials:
+  - key: "storage_path"
+    label: "Storage Path"
+    description: "Diretorio ou backend para persistencia de findings."
+    env_names: ["IAM_FINDINGS_STORE_PATH"]
+    example: "./agno_service/runtime"

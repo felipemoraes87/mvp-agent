@@ -1,0 +1,19 @@
+key: "gcp_asset"
+label: "GCP Asset Inventory"
+description: "Inventario de recursos e politicas IAM no GCP."
+scopes:
+  - "cloudasset.assets.searchAllResources"
+  - "cloudasset.assets.searchAllIamPolicies"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "project_id"
+    label: "Project ID"
+    description: "Projeto principal ou organizacao alvo."
+    env_names: ["GOOGLE_CLOUD_PROJECT", "GCP_ASSET_PROJECT_ID"]
+    example: "company-sec-prd"
+  - key: "credentials"
+    label: "Credentials JSON/Path"
+    description: "Credenciais para consultar Asset Inventory."
+    env_names: ["GOOGLE_APPLICATION_CREDENTIALS", "GCP_ASSET_CREDENTIALS_JSON"]
+    secret: true

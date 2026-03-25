@@ -13,13 +13,13 @@ APP_ROOT = Path(__file__).resolve().parents[1]
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
-from iam_team.change_guard import evaluate_change_safety
-from iam_team.coordinator import (
-    handle_iam_team_request,
+from team_engine.change_guard import evaluate_change_safety
+from team_engine.coordinator import (
+    handle_team_request,
     maybe_build_integration_setup_prompt,
     maybe_build_unavailable_integration_prompt,
 )
-from iam_team.integration_registry import IntegrationConfigRegistry
+from team_engine.integration_registry import IntegrationConfigRegistry
 
 
 REPORT_DIR = Path(__file__).resolve().parents[2] / "docs" / "reports"
@@ -68,40 +68,38 @@ def build_scenarios() -> list[dict[str, Any]]:
     return [
         {
             "id": "IAM-001",
-            "title": "Access trace com gaps controlados",
-            "goal": "Validar seleção de workflow, setup sequencial e lacunas para conectores ainda sem runtime.",
+            "title": "Investigacao aberta com Vision Agent e gaps controlados",
+            "goal": "Validar que investigacao de acesso roteia para open_investigation com Vision Agent e registra lacunas de conector.",
             "message": "investigue o acesso do usuario alice ao projeto billing-prod e descubra de onde vem a role",
-            "runtime_config": {"iamTeamProfile": {"role": "coordinator"}},
+            "runtime_config": {"iamTeamProfile": {"role": "coordinator", "teamKey": "IAM_IGA"}},
             "linked_knowledge": [],
             "env": {},
             "clear": [
-                "JUMPCLOUD_BASE_URL",
-                "JUMPCLOUD_API_KEY",
+                "VISION_BASE_URL",
+                "VISION_API_TOKEN",
                 "GITHUB_BASE_URL",
                 "GITHUB_PAT",
                 "GITHUB_TOKEN",
                 "IAM_GITHUB_REPOSITORY",
-                "IGA_BASE_URL",
-                "IGA_API_TOKEN",
             ],
             "checks": lambda response, setup_prompt, unavailable_prompt, guard_plan: [
-                ("workflow selecionado", response is not None and response.workflow_name in {"Access Trace Workflow", "Entitlement Root Cause Analysis"}),
-                ("participante JumpCloud presente", response is not None and "JumpCloud Directory Analyst" in response.participating_agents),
-                ("setup prompt gerado", bool(setup_prompt)),
-                ("lacuna de conector gerada", bool(unavailable_prompt)),
-                ("classification de entitlement presente", response is not None and response.entitlement_assessment is not None),
+                ("modo open_investigation selecionado", response is not None and response.workflow_mode == "open_investigation"),
+                ("Vision Agent participante", response is not None and "Vision Agent" in response.participating_agents),
+                ("missing configuration presente", response is not None and bool(response.missing_configuration)),
+                ("gaps registram conector nao disponivel", response is not None and any("Conector ainda nao disponivel" in gap for gap in response.diagnostic.gaps)),
+                ("change guard permanece read-only", guard_plan.decision.decision == "read_only"),
             ],
         },
         {
             "id": "IAM-002",
-            "title": "Knowledge-assisted investigation",
-            "goal": "Validar RAG pragmático com contexto documental e reasoning de adequação.",
+            "title": "Knowledge-assisted investigation com RAG",
+            "goal": "Validar selecao de workflow de knowledge, resultados de RAG e IAM Knowledge Agent no plano.",
             "message": "use a documentacao para me dizer o procedimento correto e explique se esse acesso e adequado",
-            "runtime_config": {"iamTeamProfile": {"role": "coordinator"}},
+            "runtime_config": {"iamTeamProfile": {"role": "coordinator", "teamKey": "IAM_IGA"}},
             "linked_knowledge": [
                 {
                     "name": "IAM Baseline",
-                    "description": "Procedimento oficial para baseline, aprovações, exceções e revisão de acesso no fluxo de IAM.",
+                    "description": "Procedimento oficial para baseline, aprovacoes, excecoes e revisao de acesso no fluxo de IAM.",
                     "type": "confluence",
                     "url": "https://example.local/wiki/iam-baseline",
                 }
@@ -109,79 +107,75 @@ def build_scenarios() -> list[dict[str, Any]]:
             "env": {},
             "clear": [],
             "checks": lambda response, setup_prompt, unavailable_prompt, guard_plan: [
-                ("workflow de knowledge selecionado", response is not None and response.workflow_name in {"Knowledge-Assisted Investigation", "Entitlement Root Cause Analysis", "Access Adequacy Review"}),
+                ("workflow de knowledge selecionado", response is not None and response.workflow_name in {"Knowledge-Assisted Investigation", "Documentation-Assisted Troubleshooting"}),
                 ("knowledge results presentes", response is not None and len(response.knowledge_results) > 0),
                 ("IAM Knowledge Agent no plano", response is not None and "IAM Knowledge Agent" in response.participating_agents),
-                ("entitlement assessment retornado", response is not None and response.entitlement_assessment is not None),
                 ("change guard permanece read-only", guard_plan.decision.decision == "read_only"),
             ],
         },
         {
             "id": "IAM-003",
-            "title": "IAM risk triage",
-            "goal": "Validar priorização de risco com findings, severidade e próximos passos.",
+            "title": "Classificacao de intent troubleshooting",
+            "goal": "Validar que intent de troubleshooting e identificado corretamente e roteia para investigacao aberta.",
             "message": "analise o risco desse comportamento de autenticacao com multiplos ips, geo inconsistente e falha de senha",
-            "runtime_config": {"iamTeamProfile": {"role": "coordinator"}},
+            "runtime_config": {"iamTeamProfile": {"role": "coordinator", "teamKey": "IAM_IGA"}},
             "linked_knowledge": [],
             "env": {},
             "clear": [],
             "checks": lambda response, setup_prompt, unavailable_prompt, guard_plan: [
-                ("workflow de risco selecionado", response is not None and response.workflow_name in {"IAM Risk Triage", "Suspicious Authentication Investigation"}),
-                ("risk assessment presente", response is not None and response.risk_assessment is not None),
-                ("IAM Risk Analyst participante", response is not None and "IAM Risk Analyst" in response.participating_agents),
-                ("severidade pelo menos medium", response is not None and response.risk_assessment is not None and response.risk_assessment.overall_severity in {"medium", "high", "critical"}),
+                ("intent classificado como troubleshooting", response is not None and response.request_type == "troubleshooting"),
+                ("modo open_investigation", response is not None and response.workflow_mode == "open_investigation"),
+                ("IAM Orchestrator presente no plano", response is not None and "IAM Orchestrator" in response.participating_agents),
+                ("change guard permanece read-only", guard_plan.decision.decision == "read_only"),
             ],
         },
         {
             "id": "IAM-004",
-            "title": "Controlled change with guardrails",
-            "goal": "Validar bloqueio de escrita sensível e geração de proposta auditável.",
-            "message": "gere uma proposta de mudanca segura para aplicar role owner em prod para o usuario bob e diga se precisa aprovacao",
-            "runtime_config": {"iamTeamProfile": {"role": "coordinator"}},
+            "title": "Proposta de mudanca controlada com guardrails",
+            "goal": "Validar bloqueio de escrita sensivel, geracao de change_proposal e exigencia de aprovacao.",
+            "message": "aplique a role owner em prod para o usuario bob com aprovacao do gestor",
+            "runtime_config": {"iamTeamProfile": {"role": "coordinator", "teamKey": "IAM_IGA"}},
             "linked_knowledge": [],
             "env": {},
             "clear": [],
             "checks": lambda response, setup_prompt, unavailable_prompt, guard_plan: [
-                ("workflow de change guard selecionado", response is not None and response.workflow_name in {"Controlled Change with Guardrails", "Controlled Change Proposal"}),
-                ("change proposal presente", response is not None and response.change_proposal is not None),
-                ("guard decision exige aprovação", guard_plan.decision.decision == "approval_required"),
-                ("Change Guard / Approval Agent participante", response is not None and "Change Guard / Approval Agent" in response.participating_agents),
+                ("change proposal gerado para acao de escrita", response is not None and response.change_proposal is not None),
+                ("Vision Agent no plano para operacao write", response is not None and "Vision Agent" in response.participating_agents),
+                ("guard decision exige aprovacao", guard_plan.decision.decision == "approval_required"),
             ],
         },
         {
             "id": "IAM-005",
-            "title": "Open investigation com integrações disponíveis",
-            "goal": "Validar investigação aberta quando parte do ambiente já está configurada.",
+            "title": "Open investigation com Vision configurado",
+            "goal": "Validar investigacao aberta quando Vision esta configurado e nao aparece como missing.",
             "message": "tem algo estranho entre grupos, aprovacoes e autenticacoes desse usuario",
-            "runtime_config": {"iamTeamProfile": {"role": "coordinator"}},
+            "runtime_config": {"iamTeamProfile": {"role": "coordinator", "teamKey": "IAM_IGA"}},
             "linked_knowledge": [],
             "env": {
-                "JUMPCLOUD_BASE_URL": "https://console.jumpcloud.com",
-                "JUMPCLOUD_API_KEY": "redacted-secret",
-                "IGA_BASE_URL": "https://iga.example/api",
-                "IGA_API_TOKEN": "redacted-secret",
+                "VISION_BASE_URL": "https://vision.unico.io/api",
+                "VISION_API_TOKEN": "redacted-secret",
             },
             "clear": [],
             "checks": lambda response, setup_prompt, unavailable_prompt, guard_plan: [
-                ("modo aberto ou workflow aceitável", response is not None and response.workflow_mode in {"open_investigation", "workflow"}),
-                ("sem missing de JumpCloud", response is not None and not any(item.integration_key == "jumpcloud" for item in response.missing_configuration)),
-                ("sem missing de IGA", response is not None and not any(item.integration_key == "iga" for item in response.missing_configuration)),
-                ("participantes incluem fontes operacionais", response is not None and any(name in response.participating_agents for name in ["JumpCloud Directory Analyst", "IGA Agent"])),
+                ("modo aberto ou workflow aceitavel", response is not None and response.workflow_mode in {"open_investigation", "workflow"}),
+                ("sem missing de Vision", response is not None and not any(item.integration_key == "vision" for item in response.missing_configuration)),
+                ("Vision Agent participante", response is not None and "Vision Agent" in response.participating_agents),
             ],
         },
         {
             "id": "IAM-006",
-            "title": "Conector opcional indisponível sem quebrar fluxo",
-            "goal": "Validar que integrações opcionais declaram lacuna controlada.",
-            "message": "use a documentacao e conversas recentes do time para investigar esse fluxo",
-            "runtime_config": {"iamTeamProfile": {"role": "coordinator"}},
+            "title": "Diagnostico de provisionamento com lacuna de Vision",
+            "goal": "Validar deteccao do workflow de provisionamento e registro de gaps quando Vision nao esta configurado.",
+            "message": "o acesso nao provisionou no Vision e nao refletiu no sistema, preciso entender onde falhou",
+            "runtime_config": {"iamTeamProfile": {"role": "coordinator", "teamKey": "IAM_IGA"}},
             "linked_knowledge": [],
             "env": {},
-            "clear": ["SLACK_BOT_TOKEN", "SLACK_WORKSPACE", "GOOGLE_DRIVE_CREDENTIALS_JSON", "GOOGLE_DRIVE_FOLDER_ID"],
+            "clear": ["VISION_BASE_URL", "VISION_API_TOKEN"],
             "checks": lambda response, setup_prompt, unavailable_prompt, guard_plan: [
-                ("workflow knowledge/documentation selecionado", response is not None and response.workflow_name in {"Knowledge-Assisted Investigation", "Documentation-Assisted Troubleshooting"}),
-                ("unavailable prompt menciona Slack ou Drive", bool(unavailable_prompt) and ("Slack" in unavailable_prompt or "Google Drive/Docs" in unavailable_prompt)),
-                ("gaps registram lacuna de conector", response is not None and any("Conector ainda nao disponivel" in gap for gap in response.diagnostic.gaps)),
+                ("workflow de provisionamento selecionado", response is not None and response.workflow_name == "Provisioning / Reconciliation Diagnostic"),
+                ("Vision Agent participante", response is not None and "Vision Agent" in response.participating_agents),
+                ("gaps registram lacuna de Vision", response is not None and any("Vision" in gap for gap in response.diagnostic.gaps)),
+                ("change guard permanece read-only", guard_plan.decision.decision == "read_only"),
             ],
         },
     ]
@@ -388,7 +382,8 @@ def main() -> None:
     results: list[dict[str, Any]] = []
     for scenario in build_scenarios():
         with temporary_env(scenario["env"], clear_keys=scenario["clear"]):
-            response = handle_iam_team_request(
+            response = handle_team_request(
+                team_key=scenario["runtime_config"].get("iamTeamProfile", {}).get("teamKey", "IAM_IGA"),
                 agent_name="IAM Orchestrator",
                 runtime_config=scenario["runtime_config"],
                 message=scenario["message"],

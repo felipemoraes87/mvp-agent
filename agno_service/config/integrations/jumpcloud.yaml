@@ -1,0 +1,26 @@
+key: "jumpcloud"
+label: "JumpCloud"
+description: "Directory, grupos, dispositivos e eventos de autenticacao via REST API (connectors/jumpcloud.py)."
+scopes:
+  - "users:read"
+  - "groups:read"
+  - "systems:read"
+  - "insights:read"
+supports_write: false
+runtime_available: true
+credentials:
+  - key: "base_url"
+    label: "Base URL"
+    description: "Base URL da API REST do JumpCloud."
+    env_names: ["JUMPCLOUD_BASE_URL"]
+    example: "https://console.jumpcloud.com"
+  - key: "client_id"
+    label: "Client ID (SA)"
+    description: "Client ID da Service Account OAuth (formato sa_xxxx)."
+    env_names: ["JUMPCLOUD_CLIENT_ID"]
+    secret: false
+  - key: "client_secret"
+    label: "Client Secret (SA)"
+    description: "Client Secret da Service Account OAuth."
+    env_names: ["JUMPCLOUD_CLIENT_SECRET"]
+    secret: true

@@ -1,0 +1,19 @@
+key: "google_drive"
+label: "Google Drive/Docs"
+description: "Leitura complementar de documentos operacionais fora do Confluence."
+scopes:
+  - "drive.readonly"
+  - "documents.readonly"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "credentials"
+    label: "Credentials JSON/Path"
+    description: "Credenciais Google para leitura de Drive e Docs."
+    env_names: ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_DRIVE_CREDENTIALS_JSON"]
+    secret: true
+  - key: "shared_drive"
+    label: "Shared Drive/Folder"
+    description: "Drive, pasta ou escopo principal de documentos."
+    env_names: ["GOOGLE_DRIVE_SHARED_DRIVE", "GOOGLE_DRIVE_FOLDER_ID"]
+    example: "iam-ops-drive"

@@ -1,0 +1,23 @@
+key: "confluence"
+label: "Confluence"
+description: "Documentacao operacional, runbooks e procedimentos."
+scopes:
+  - "read:confluence-content"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "base_url"
+    label: "Base URL"
+    description: "URL base do Confluence."
+    env_names: ["CONFLUENCE_BASE_URL"]
+    example: "https://company.atlassian.net/wiki"
+  - key: "username"
+    label: "Username/Email"
+    description: "Usuario tecnico ou email da integracao Confluence."
+    env_names: ["CONFLUENCE_USERNAME", "CONFLUENCE_EMAIL"]
+    example: "iam-bot@company.com"
+  - key: "token"
+    label: "API Token"
+    description: "Token de API com acesso de leitura."
+    env_names: ["CONFLUENCE_API_TOKEN"]
+    secret: true

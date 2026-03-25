@@ -1,0 +1,52 @@
+key: "jumpcloud"
+label: "JumpCloud MCP"
+description: "MCP server oficial do JumpCloud para gestao de usuarios, dispositivos, grupos e eventos de diretorio."
+endpoint: "https://mcp.jumpcloud.com/v1"
+transport: "streamable_http"
+teams: ["IAM_IGA"]
+
+# Auth suportada pelo MCP server do JumpCloud:
+#   api_key  → Authorization: Bearer jca_xxxx  (Admin API Key gerada no portal)
+#   oauth    → browser-based, nao serve para agentes programaticos
+# A SA OAuth (client_id + client_secret) funciona apenas na REST API direta,
+# nao no MCP server. Use connector/jumpcloud.py para acesso programatico via SA.
+auth:
+  type: "api_key"
+  header: "Authorization"
+  value_prefix: "Bearer "
+  key_env: "JUMPCLOUD_ADMIN_API_KEY"
+
+# Ferramentas disponiveis no MCP server (subconjunto da API JumpCloud):
+read_only_tools:
+  - "users_list"
+  - "user_get"
+  - "user_group_membership"
+  - "user_groups_list"
+  - "devices_list"
+  - "device_get"
+  - "applications_list"
+  - "application_get"
+  - "admins_list"
+  - "di_events_get"
+  - "search_api"
+
+write_tools:
+  - "user_suspend"
+  - "user_unlock"
+  - "user_reactivate"
+  - "user_add_mfa"
+  - "user_remove_mfa_requirement"
+  - "user_resetmfa"
+  - "user_force_password_reset"
+  - "user_send_invitation_email"
+  - "user_send_reset_password_email"
+  - "device_lock"
+  - "device_restart"
+  - "device_shutdown"
+  - "device_erase"
+  - "device_update"
+  - "commands_list"
+
+# Pre-requisito: habilitar em JumpCloud Admin Portal
+#   Settings → Features → JumpCloud AI → MCP Server → On
+runtime_available: true

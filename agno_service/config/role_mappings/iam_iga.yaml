@@ -1,0 +1,30 @@
+team: "IAM_IGA"
+
+rules:
+  - system: "jira"
+    request_type: "new_access"
+    business_role: "BR_JIRA_STANDARD_USER"
+    system_keywords: ["jira", "atlassian"]
+    request_keywords: ["acesso", "novo acesso", "incluir", "liberar"]
+    guidance_comment: "Para acesso ao Jira, informe usuario alvo, projeto/fila, nivel de acesso e justificativa."
+
+  - system: "confluence"
+    request_type: "new_access"
+    business_role: "BR_CONFLUENCE_STANDARD_USER"
+    system_keywords: ["confluence", "wiki"]
+    request_keywords: ["acesso", "novo acesso", "incluir", "liberar"]
+    guidance_comment: "Para acesso ao Confluence, informe usuario alvo, space/area, perfil esperado e justificativa."
+
+  - system: "github"
+    request_type: "new_access"
+    business_role: "BR_GITHUB_REPOSITORY_READER"
+    system_keywords: ["github", "repositorio", "repo"]
+    request_keywords: ["acesso", "novo acesso", "incluir", "liberar"]
+    guidance_comment: "Para acesso ao GitHub, informe usuario alvo, repositorio ou organizacao e nivel de acesso."
+
+  - system: "sap"
+    request_type: "new_access"
+    business_role: "BR_SAP_STANDARD_REQUESTER"
+    system_keywords: ["sap", "financeiro", "fiori"]
+    request_keywords: ["acesso", "novo acesso", "incluir", "liberar"]
+    guidance_comment: "Para acesso ao SAP, informe usuario alvo, modulo, atividade esperada e justificativa."

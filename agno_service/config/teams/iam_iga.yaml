@@ -1,0 +1,85 @@
+key: "IAM_IGA"
+name: "IAM & Governanca de Identidades"
+description: "Time responsavel por acesso, provisionamento e governanca de identidades."
+domains: ["iam", "identity", "access", "governance", "provisioning"]
+routing_keywords:
+  - "iam"
+  - "identity"
+  - "acesso"
+  - "role"
+  - "permissao"
+  - "vision"
+  - "github"
+  - "bigquery"
+  - "jira"
+  - "confluence"
+owner: "sec-iam@unico.io"
+
+intent_classifier:
+  write_triggers:
+    - "dispare"
+    - "execute"
+    - "aplique"
+    - "grave findings"
+    - "reconcile"
+    - "reconciliacao"
+    - "mude"
+    - "altere"
+    - "remova"
+    - "conceda"
+    - "libere"
+
+  # Categorias avaliadas em ordem — primeira correspondencia vence.
+  # all_of: todas as listas precisam ter ao menos um match.
+  # any_of: basta um token dar match.
+  categories:
+    - name: "access_request"
+      rationale: "A solicitacao descreve intake ou tratamento de ticket Jira de acesso."
+      all_of:
+        - ["jira", "chamado", "ticket", "fila"]
+        - ["acesso", "business role", "perfil", "role", "liberar", "conceder"]
+
+    - name: "investigation"
+      rationale: "A solicitacao pede rastreio, correlacao ou investigacao."
+      any_of:
+        - "de onde vem"
+        - "origem"
+        - "trace"
+        - "investigue"
+        - "investigar"
+        - "correlacione"
+        - "suspeit"
+        - "root cause"
+        - "adequado"
+        - "adequacao"
+
+    - name: "comparison"
+      rationale: "A solicitacao pede comparacao entre estados, papeis ou fontes."
+      any_of:
+        - "compare"
+        - "comparar"
+        - "diferenca"
+
+    - name: "troubleshooting"
+      rationale: "A solicitacao indica falha operacional ou diagnostico."
+      any_of:
+        - "troubleshoot"
+        - "nao provisionou"
+        - "nao refletiu"
+        - "erro"
+        - "falha"
+
+    - name: "audit"
+      rationale: "A solicitacao indica revisao ou auditoria de acessos."
+      any_of:
+        - "auditoria"
+        - "audit"
+        - "review de acesso"
+        - "access review"
+
+    - name: "workflow_known"
+      rationale: "A solicitacao cita workflow, runbook ou fluxo conhecido."
+      any_of:
+        - "workflow"
+        - "playbook"
+        - "runbook"

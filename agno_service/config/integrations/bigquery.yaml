@@ -1,0 +1,24 @@
+key: "bigquery"
+label: "BigQuery"
+description: "Consultas analiticas e correlacao de eventos de IAM/Sec."
+scopes:
+  - "bigquery.jobs.create"
+  - "bigquery.tables.getData"
+supports_write: true
+runtime_available: false
+credentials:
+  - key: "project_id"
+    label: "Project ID"
+    description: "Projeto GCP onde as consultas serao executadas."
+    env_names: ["BIGQUERY_PROJECT_ID", "GOOGLE_CLOUD_PROJECT"]
+    example: "company-sec-prd"
+  - key: "dataset"
+    label: "Dataset"
+    description: "Dataset principal com tabelas de IAM/Security."
+    env_names: ["BIGQUERY_DATASET"]
+    example: "iam_security"
+  - key: "credentials"
+    label: "Credentials JSON/Path"
+    description: "Arquivo de service account ou JSON inline."
+    env_names: ["GOOGLE_APPLICATION_CREDENTIALS", "BIGQUERY_CREDENTIALS_JSON"]
+    secret: true

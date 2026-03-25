@@ -1,0 +1,23 @@
+key: "jira"
+label: "Jira"
+description: "Tickets, filas, requests e mudancas relacionadas a IAM."
+scopes:
+  - "read:jira-work"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "base_url"
+    label: "Base URL"
+    description: "URL base da instancia Jira."
+    env_names: ["JIRA_BASE_URL"]
+    example: "https://company.atlassian.net"
+  - key: "username"
+    label: "Username/Email"
+    description: "Usuario tecnico ou email da integracao Jira."
+    env_names: ["JIRA_USERNAME", "JIRA_EMAIL"]
+    example: "iam-bot@company.com"
+  - key: "token"
+    label: "API Token"
+    description: "Token de API para leitura de tickets e filas."
+    env_names: ["JIRA_API_TOKEN"]
+    secret: true

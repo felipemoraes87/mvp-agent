@@ -1,0 +1,35 @@
+name: "Jira Access Request Triage"
+team: "IAM_IGA"
+objective: "Ler tickets Jira de IAM, decidir se sao solicitacoes de acesso validas, mapear business role e preparar acao segura no Vision."
+preconditions:
+  - "Ticket Jira ou texto equivalente com contexto de solicitacao de acesso."
+integrations: ["jira", "confluence", "vision"]
+agents:
+  - "IAM Orchestrator"
+  - "Jira/Confluence IAM Agent"
+  - "IAM Knowledge Agent"
+  - "Vision Agent"
+steps:
+  - "Ler o ticket Jira e extrair sistema, usuario alvo, tipo de pedido e justificativa."
+  - "Decidir se o ticket representa uma solicitacao de acesso valida ou apenas uma duvida operacional."
+  - "Consultar a documentacao para validar o processo e a business role esperada."
+  - "Resolver a business role a partir da tabela de mapeamento configurada."
+  - "Enviar requisicao ao Vision somente quando houver match deterministico e dados suficientes."
+  - "Atualizar o Jira com orientacao, resultado ou necessidade de clarificacao."
+success_criteria:
+  - "Tickets validos sao separados de pedidos ambiguos."
+  - "Business role e proximo passo ficam explicitos no retorno."
+output_format: "classificacao do ticket, business role, acao no Vision, comentario sugerido para Jira, proximos passos"
+failure_handling:
+  - "Sem business role unica, comentar orientacao no Jira e nao chamar o Vision."
+  - "Se o Vision exigir aprovacao, retornar apenas proposta auditavel."
+setup_points:
+  - "Pedir Jira/Confluence para leitura do ticket e contexto."
+  - "Pedir Vision apenas se o ticket for elegivel para tratamento automatizado."
+match_keywords:
+  - "chamado"
+  - "ticket"
+  - "fila"
+  - "business role"
+  - "solicitacao de acesso"
+  - "request de acesso"

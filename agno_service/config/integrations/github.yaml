@@ -1,0 +1,24 @@
+key: "github"
+label: "GitHub"
+description: "Repositorios IAM/GCP, manifests, PRs e historico."
+scopes:
+  - "contents:read"
+  - "pull_requests:read"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "base_url"
+    label: "Base URL"
+    description: "URL da API GitHub ou GitHub Enterprise."
+    env_names: ["GITHUB_BASE_URL"]
+    example: "https://api.github.com"
+  - key: "token"
+    label: "Token"
+    description: "Token de acesso com leitura em repositorios e pull requests."
+    env_names: ["GITHUB_PAT", "GITHUB_TOKEN"]
+    secret: true
+  - key: "repository"
+    label: "Repositorio"
+    description: "Repositorio principal que concentra roles e mappings."
+    env_names: ["IAM_GITHUB_REPOSITORY"]
+    example: "org/repo-iam"

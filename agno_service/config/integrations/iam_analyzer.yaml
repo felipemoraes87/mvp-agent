@@ -1,0 +1,18 @@
+key: "iam_analyzer"
+label: "GCP IAM Analyzer"
+description: "Analise adicional de bindings e impacto no IAM do GCP."
+scopes:
+  - "cloudasset.analyzeIamPolicy"
+supports_write: false
+runtime_available: false
+credentials:
+  - key: "project_id"
+    label: "Project ID"
+    description: "Projeto ou organizacao de referencia para analise IAM."
+    env_names: ["GOOGLE_CLOUD_PROJECT", "IAM_ANALYZER_PROJECT_ID"]
+    example: "company-sec-prd"
+  - key: "credentials"
+    label: "Credentials JSON/Path"
+    description: "Credenciais para IAM Analyzer."
+    env_names: ["GOOGLE_APPLICATION_CREDENTIALS", "IAM_ANALYZER_CREDENTIALS_JSON"]
+    secret: true
